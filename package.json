@@ -1,8 +1,9 @@
 {
-  "name": "wxt-react-starter",
-  "version": "0.0.0",
+  "name": "bookmark-otter",
+  "version": "0.1.0",
   "private": true,
-  "description": "manifest.json description",
+  "description": "Smart, AI-powered bookmark manager & health suite for Google Chrome",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "wxt",

@@ -1,20 +1,14 @@
 <div align="center">
-  <img src="./assets/logo.png" width="96" height="96" alt="Bookmark Otter Logo" style="border-radius: 20px; margin-bottom: 12px;" />
+  <img src="./assets/logo.png" width="96" alt="Bookmark Otter Logo" style="border-radius: 20px; margin-bottom: 12px;" />
   <h1>Bookmark Otter</h1>
 
   <p>
     <a href="https://chrome.google.com/webstore" target="_blank" rel="noopener noreferrer">
       <img src="https://shieldcn.dev/badge/Chrome%20Web%20Store.svg?size=xs&theme=blue&logo=chromewebstore" alt="Chrome Web Store" />
     </a>
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Release-v0.1.0-blue.svg?size=xs&mode=dark">
-      <img alt="Release" src="https://shieldcn.dev/badge/Release-v0.1.0-blue.svg?size=xs&mode=light">
-    </picture>
+    <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/release/agmmnn/bookmark-otter.svg?size=xs&amp;mode=dark"><img alt="Release" src="https://www.shieldcn.dev/github/release/agmmnn/bookmark-otter.svg?size=xs&amp;mode=light"></picture>
     <img src="https://shieldcn.dev/badge/Manifest-V3.svg?size=xs&theme=emerald" alt="Manifest V3" />
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/License-MIT.svg?variant=ghost&size=xs&mode=dark">
-      <img alt="License" src="https://shieldcn.dev/badge/License-MIT.svg?variant=ghost&size=xs&mode=light">
-    </picture>
+    <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/license/agmmnn/bookmark-otter.svg?variant=ghost&amp;size=xs&amp;mode=dark"><img alt="License" src="https://www.shieldcn.dev/github/license/agmmnn/bookmark-otter.svg?variant=ghost&amp;size=xs&amp;mode=light"></picture>
   </p>
 
   <p><strong>Smart, AI-powered bookmark manager & health suite for Google Chrome.</strong></p>
