@@ -6,20 +6,34 @@ import {
   ShieldAlert,
   ArrowRight,
   Copy,
-  FolderX,
   RefreshCw,
+  Sparkles,
+  ExternalLink,
+  Layers,
+  CalendarDays,
+  FileSpreadsheet,
+  FileCode,
+  Share2,
+  Check,
+  CheckCircle2,
+  AlertTriangle,
+  FolderTree,
+  Clock,
+  Radio,
 } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
-import { getBookmarkTree } from '@/services/bookmarks';
+import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import { calculateInsights } from '@/services/insights';
 import type { InsightsData } from '@/types';
 
 interface InsightsProps {
-  onNavigateToDoctor?: () => void;
+  onNavigateToDoctor?: (
+    subTab?: 'duplicates' | 'similar' | 'trackers' | 'insecure' | '404' | 'empty'
+  ) => void;
   onNavigateToCopilot?: () => void;
   onNavigateToExplorer?: (query: string) => void;
 }
@@ -29,9 +43,10 @@ export const Insights: React.FC<InsightsProps> = ({
   onNavigateToCopilot: _onNavigateToCopilot,
   onNavigateToExplorer,
 }) => {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [data, setData] = useState<InsightsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [copiedSummary, setCopiedSummary] = useState(false);
 
   const loadMetrics = async () => {
     setIsLoading(true);
@@ -68,6 +83,88 @@ export const Insights: React.FC<InsightsProps> = ({
       case 'critical':
         return t('healthCritical') || 'Critical Issues';
     }
+  };
+
+  // 1. Export Domains CSV
+  const handleExportDomainsCsv = () => {
+    if (!data) return;
+    const rows = [
+      ['Domain', 'Bookmarks Count', 'Percentage'],
+      ...data.topDomains.map((d) => [d.domain, String(d.count), `${d.percentage}%`]),
+    ];
+    const csvContent = rows
+      .map((r) => r.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bookmark-domains-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 2. Export Full JSON Data
+  const handleExportFullJson = async () => {
+    try {
+      const tree = await getBookmarkTree();
+      const all = flattenBookmarks(tree);
+      const jsonContent = JSON.stringify(
+        all.map((b) => ({
+          title: b.title,
+          url: b.url,
+          domain: b.domain,
+          path: b.path,
+          dateAdded: b.dateAdded ? new Date(b.dateAdded).toISOString() : undefined,
+        })),
+        null,
+        2
+      );
+      const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bookmark-otter-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export JSON:', err);
+    }
+  };
+
+  // 3. Copy Summary Card Text
+  const handleCopySummary = async () => {
+    if (!data) return;
+    const oldestStr = data.oldestBookmark
+      ? `• Oldest Bookmark: ${data.oldestBookmark.title} (${new Date(
+          data.oldestBookmark.dateAdded
+        ).getFullYear()})`
+      : '';
+    const busiestStr = data.busiestMonth
+      ? `• Busiest Month: ${new Date(
+          data.busiestMonth.year,
+          data.busiestMonth.month
+        ).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US', {
+          month: 'long',
+          year: 'numeric',
+        })} (${data.busiestMonth.count} bookmarks)`
+      : '';
+
+    const text = [
+      `🦦 Bookmark Otter — Library Report`,
+      `• Health Score: ${data.healthScore}/100 (${getRatingLabel(data.rating)})`,
+      `• Total Bookmarks: ${data.totalBookmarks} across ${data.totalFolders} folders`,
+      `• Unique Domains: ${data.uniqueDomains} (${data.httpsRatio}% HTTPS)`,
+      `• Duplicates: ${data.duplicateCount} | Empty Folders: ${data.emptyFolderCount}`,
+      oldestStr,
+      busiestStr,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    await navigator.clipboard.writeText(text);
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2000);
   };
 
   return (
@@ -107,9 +204,9 @@ export const Insights: React.FC<InsightsProps> = ({
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Health Score Hero Card */}
+          {/* ==================== 1. HEALTH SCORE HERO CARD ==================== */}
           <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <span className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                   {t('overallHealth') || 'Overall Health Score'}
@@ -141,7 +238,7 @@ export const Insights: React.FC<InsightsProps> = ({
 
               {/* Visual Ring / Badge Representation */}
               <div
-                className={`flex size-16 shrink-0 items-center justify-center rounded-full border-4 font-mono text-lg font-bold ${getScoreColor(
+                className={`flex size-16 shrink-0 items-center justify-center rounded-full border-4 font-mono text-lg font-bold shadow-xs ${getScoreColor(
                   data.healthScore
                 )}`}
               >
@@ -149,30 +246,230 @@ export const Insights: React.FC<InsightsProps> = ({
               </div>
             </div>
 
-            {/* Quick recommendation nudge */}
-            {(data.duplicateCount > 0 || data.emptyFolderCount > 0) && (
-              <div className="border-border/30 flex items-center justify-between border-t pt-2 text-xs">
-                <span className="text-muted-foreground text-[11px]">
-                  💡{' '}
-                  {t('optimizeSuggestion') ||
-                    'Resolve detected duplicates and empty folders in Doctor.'}
-                </span>
-                {onNavigateToDoctor && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={onNavigateToDoctor}
-                    className="text-primary hover:text-primary h-6 px-2 text-[11px] active:scale-[0.97]"
-                  >
-                    {t('openDoctorBtn') || 'Open Doctor'}
-                    <ArrowRight className="ml-1 size-3" />
-                  </Button>
-                )}
+            {/* Score Deductions Breakdown */}
+            {(data.penalties.duplicates > 0 ||
+              data.penalties.emptyFolders > 0 ||
+              data.penalties.insecureHttp > 0 ||
+              data.penalties.brokenLinks > 0) && (
+              <div className="border-border/40 bg-muted/20 space-y-1.5 rounded-lg border p-2.5 text-xs">
+                <div className="text-muted-foreground flex items-center justify-between text-[10px] font-semibold tracking-wider uppercase">
+                  <span>{t('scoreBreakdown') || 'Score Deductions'}</span>
+                  <span className="font-mono">-{100 - data.healthScore} pts</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  {data.penalties.duplicates > 0 && (
+                    <div className="flex items-center justify-between text-amber-600 dark:text-amber-400">
+                      <span>• {t('deductDuplicates') || 'Duplicates'}</span>
+                      <span className="font-mono font-medium">-{data.penalties.duplicates}</span>
+                    </div>
+                  )}
+                  {data.penalties.emptyFolders > 0 && (
+                    <div className="flex items-center justify-between text-blue-600 dark:text-blue-400">
+                      <span>• {t('deductEmpty') || 'Empty folders'}</span>
+                      <span className="font-mono font-medium">-{data.penalties.emptyFolders}</span>
+                    </div>
+                  )}
+                  {data.penalties.insecureHttp > 0 && (
+                    <div
+                      onClick={() => onNavigateToDoctor?.('insecure')}
+                      className="text-muted-foreground flex cursor-pointer items-center justify-between transition-colors hover:text-amber-500"
+                      title={t('openDoctor') || 'Open in Doctor'}
+                    >
+                      <span>• {t('deductHttp') || 'Insecure HTTP'}</span>
+                      <span className="font-mono font-medium">-{data.penalties.insecureHttp}</span>
+                    </div>
+                  )}
+                  {data.penalties.brokenLinks > 0 && (
+                    <div className="flex items-center justify-between text-rose-600 dark:text-rose-400">
+                      <span>• {t('deductBroken') || 'Broken/404'}</span>
+                      <span className="font-mono font-medium">-{data.penalties.brokenLinks}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
 
-          {/* 4 Key Metric Cards */}
+          {/* ==================== 2. DIAGNOSTIC ACTION CHIPS (DOCTOR QUICK ACCESS) ==================== */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {/* Chip 1: Duplicates */}
+            <div
+              onClick={() => onNavigateToDoctor?.('duplicates')}
+              className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
+                data.duplicateCount > 0
+                  ? 'border-amber-500/30 bg-amber-500/5'
+                  : 'border-border/50 bg-card'
+              }`}
+              title={t('openDoctor') || 'Open in Doctor'}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground text-[10.5px] font-medium">
+                  {t('duplicatesMetric') || 'Duplicates'}
+                </span>
+                {data.duplicateCount > 0 ? (
+                  <ArrowRight className="size-3 text-amber-500" />
+                ) : (
+                  <CheckCircle2 className="size-3 text-emerald-500" />
+                )}
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono text-base font-bold">{data.duplicateCount}</span>
+                <span className="text-muted-foreground text-[9.5px]">
+                  {data.duplicateCount === 0
+                    ? t('allClear') || 'All clear'
+                    : t('openDoctor') || 'Open Doctor'}
+                </span>
+              </div>
+            </div>
+
+            {/* Chip 2: Similar Bookmarks */}
+            <div
+              onClick={() => onNavigateToDoctor?.('similar')}
+              className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
+                (data.similarCount || 0) > 0
+                  ? 'border-cyan-500/30 bg-cyan-500/5'
+                  : 'border-border/50 bg-card'
+              }`}
+              title={t('openDoctor') || 'Open in Doctor'}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground text-[10.5px] font-medium">
+                  {t('tabSimilar') || 'Similar'}
+                </span>
+                {(data.similarCount || 0) > 0 ? (
+                  <ArrowRight className="size-3 text-cyan-500" />
+                ) : (
+                  <CheckCircle2 className="size-3 text-emerald-500" />
+                )}
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono text-base font-bold">{data.similarCount || 0}</span>
+                <span className="text-muted-foreground text-[9.5px]">
+                  {(data.similarCount || 0) === 0
+                    ? t('allClear') || 'All clear'
+                    : t('openDoctor') || 'Open Doctor'}
+                </span>
+              </div>
+            </div>
+
+            {/* Chip 3: Tracking Params */}
+            <div
+              onClick={() => onNavigateToDoctor?.('trackers')}
+              className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
+                (data.trackingCount || 0) > 0
+                  ? 'border-teal-500/30 bg-teal-500/5'
+                  : 'border-border/50 bg-card'
+              }`}
+              title={t('openDoctor') || 'Open in Doctor'}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground text-[10.5px] font-medium">
+                  {t('tabTrackers') || 'Trackers'}
+                </span>
+                {(data.trackingCount || 0) > 0 ? (
+                  <ArrowRight className="size-3 text-teal-500" />
+                ) : (
+                  <CheckCircle2 className="size-3 text-emerald-500" />
+                )}
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono text-base font-bold">{data.trackingCount || 0}</span>
+                <span className="text-muted-foreground text-[9.5px]">
+                  {(data.trackingCount || 0) === 0
+                    ? t('allClear') || 'All clear'
+                    : t('openDoctor') || 'Open Doctor'}
+                </span>
+              </div>
+            </div>
+
+            {/* Chip 4: Insecure HTTP */}
+            <div
+              onClick={() => onNavigateToDoctor?.('insecure')}
+              className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
+                data.httpCount > 0
+                  ? 'border-amber-500/30 bg-amber-500/5'
+                  : 'border-border/50 bg-card'
+              }`}
+              title={t('openDoctor') || 'Open in Doctor'}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground text-[10.5px] font-medium">
+                  {t('tabInsecure') || 'HTTP'}
+                </span>
+                {data.httpCount > 0 ? (
+                  <ArrowRight className="size-3 text-amber-500" />
+                ) : (
+                  <CheckCircle2 className="size-3 text-emerald-500" />
+                )}
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono text-base font-bold">{data.httpCount}</span>
+                <span className="text-muted-foreground text-[9.5px]">
+                  {data.httpCount === 0
+                    ? t('allClear') || 'All clear'
+                    : t('upgradeSingleBtn') || 'Upgrade'}
+                </span>
+              </div>
+            </div>
+
+            {/* Chip 5: Dead Links (404) */}
+            <div
+              onClick={() => onNavigateToDoctor?.('404')}
+              className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
+                (data.brokenCount || 0) > 0
+                  ? 'border-rose-500/30 bg-rose-500/5'
+                  : 'border-border/50 bg-card'
+              }`}
+              title={t('openDoctor') || 'Open in Doctor'}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground text-[10.5px] font-medium">404 Links</span>
+                {(data.brokenCount || 0) > 0 ? (
+                  <AlertTriangle className="size-3 text-rose-500" />
+                ) : (
+                  <Radio className="text-muted-foreground/60 size-3" />
+                )}
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono text-base font-bold">{data.brokenCount || 0}</span>
+                <span className="text-muted-foreground text-[9.5px]">
+                  {(data.brokenCount || 0) === 0 ? 'Run scan' : 'View dead'}
+                </span>
+              </div>
+            </div>
+
+            {/* Chip 5: Empty Folders */}
+            <div
+              onClick={() => onNavigateToDoctor?.('empty')}
+              className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
+                data.emptyFolderCount > 0
+                  ? 'border-blue-500/30 bg-blue-500/5'
+                  : 'border-border/50 bg-card'
+              }`}
+              title={t('openDoctor') || 'Open in Doctor'}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground text-[10.5px] font-medium">
+                  {t('emptyFoldersMetric') || 'Empty Folders'}
+                </span>
+                {data.emptyFolderCount > 0 ? (
+                  <ArrowRight className="size-3 text-blue-500" />
+                ) : (
+                  <CheckCircle2 className="size-3 text-emerald-500" />
+                )}
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono text-base font-bold">{data.emptyFolderCount}</span>
+                <span className="text-muted-foreground text-[9.5px]">
+                  {data.emptyFolderCount === 0
+                    ? t('allClear') || 'All clear'
+                    : t('openDoctor') || 'Open Doctor'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* ==================== 3. 4 KEY METRIC CARDS ==================== */}
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-3">
               <div className="text-muted-foreground flex items-center justify-between">
@@ -211,42 +508,252 @@ export const Insights: React.FC<InsightsProps> = ({
             </div>
           </div>
 
-          {/* Clutter Breakdown Cards */}
-          <div className="grid grid-cols-2 gap-2.5">
-            <div className="border-border/50 bg-card space-y-1 rounded-lg border p-3">
-              <div className="text-muted-foreground flex items-center gap-1.5">
-                <Copy className="size-3 text-amber-500" />
-                <span className="text-xs font-medium">{t('duplicatesMetric') || 'Duplicates'}</span>
-              </div>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-foreground font-mono text-base font-bold">
-                  {data.duplicateCount}
-                </span>
-                <span className="text-muted-foreground text-[10px]">
-                  {t('redundantLinks') || 'redundant links'}
-                </span>
-              </div>
+          {/* ==================== 4. LIBRARY FACTS & TRIVIA (STAR FEATURE ⭐) ==================== */}
+          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="size-3.5 text-amber-500" />
+              <h3 className="text-foreground text-xs font-semibold tracking-tight">
+                {t('libraryFactsTitle') || 'Library Facts'}
+              </h3>
             </div>
 
-            <div className="border-border/50 bg-card space-y-1 rounded-lg border p-3">
-              <div className="text-muted-foreground flex items-center gap-1.5">
-                <FolderX className="size-3 text-blue-500" />
-                <span className="text-xs font-medium">
-                  {t('emptyFoldersMetric') || 'Empty Folders'}
+            <div className="divide-border/30 divide-y text-xs">
+              {/* Oldest Bookmark */}
+              {data.oldestBookmark && (
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <Clock className="size-3 text-blue-500" />
+                    {t('oldestBookmark') || 'Oldest Bookmark'}
+                  </span>
+                  <a
+                    href={data.oldestBookmark.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary flex max-w-[200px] items-center gap-1 truncate text-[11px] font-medium hover:underline"
+                    title={`${data.oldestBookmark.title} (${new Date(
+                      data.oldestBookmark.dateAdded
+                    ).toLocaleDateString()})`}
+                  >
+                    <span className="truncate">{data.oldestBookmark.title}</span>
+                    <span className="text-muted-foreground font-mono text-[10px]">
+                      ({new Date(data.oldestBookmark.dateAdded).getFullYear()})
+                    </span>
+                    <ExternalLink className="size-2.5 shrink-0 opacity-60" />
+                  </a>
+                </div>
+              )}
+
+              {/* Busiest Month */}
+              {data.busiestMonth && (
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <CalendarDays className="size-3 text-emerald-500" />
+                    {t('busiestMonth') || 'Busiest Month'}
+                  </span>
+                  <span className="font-mono text-[11px] font-medium">
+                    {new Date(data.busiestMonth.year, data.busiestMonth.month).toLocaleString(
+                      lang === 'tr' ? 'tr-TR' : 'en-US',
+                      { month: 'short', year: 'numeric' }
+                    )}{' '}
+                    <span className="text-muted-foreground font-normal">
+                      ({data.busiestMonth.count} added)
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {/* Deepest Nesting */}
+              <div className="flex items-center justify-between py-2">
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <Layers className="size-3 text-purple-500" />
+                  {t('deepestNesting') || 'Deepest Folder Nesting'}
+                </span>
+                <span
+                  className="font-mono text-[11px] font-medium"
+                  title={data.deepestFolderPath || undefined}
+                >
+                  {data.deepestNesting} {t('levels') || 'levels'}
                 </span>
               </div>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-foreground font-mono text-base font-bold">
-                  {data.emptyFolderCount}
+
+              {/* Loose Bookmarks (No subfolder) */}
+              <div className="flex items-center justify-between py-2">
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <Bookmark className="size-3 text-amber-500" />
+                  {t('looseBookmarks') || 'Loose Bookmarks (No Folder)'}
                 </span>
-                <span className="text-muted-foreground text-[10px]">
-                  {t('unusedFolders') || 'unused'}
+                <button
+                  onClick={() => onNavigateToExplorer?.('Bookmarks Bar')}
+                  className="text-foreground hover:text-primary cursor-pointer font-mono text-[11px] font-medium"
+                  title="Filter in Explorer"
+                >
+                  {data.looseBookmarksCount}
+                </button>
+              </div>
+
+              {/* Average Bookmarks per Folder */}
+              <div className="flex items-center justify-between py-2">
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <FolderTree className="size-3 text-sky-500" />
+                  {t('avgBookmarksPerFolder') || 'Avg. Bookmarks / Folder'}
+                </span>
+                <span className="font-mono text-[11px] font-medium">
+                  {data.avgBookmarksPerFolder}
+                </span>
+              </div>
+
+              {/* Domains Saved Only Once */}
+              <div className="flex items-center justify-between py-2">
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <Globe className="size-3 text-indigo-500" />
+                  {t('singleUseDomains') || 'Domains Saved Only Once'}
+                </span>
+                <span className="font-mono text-[11px] font-medium">
+                  {data.singleUseDomainsCount}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Top Domains Distribution */}
+          {/* ==================== 5. BOOKMARK AGE DISTRIBUTION ==================== */}
+          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-foreground text-xs font-semibold tracking-tight">
+                {t('bookmarkAgeTitle') || 'Bookmark Age Distribution'}
+              </h3>
+              <span className="text-muted-foreground text-[10.5px]">
+                {data.totalBookmarks} total
+              </span>
+            </div>
+
+            {/* Segmented Progress Bar */}
+            <div className="bg-muted/40 flex h-2 w-full overflow-hidden rounded-full">
+              <div
+                className="bg-emerald-500 transition-all duration-300"
+                style={{ width: `${data.ageDistribution.under6Months.percentage}%` }}
+                title={`< 6m: ${data.ageDistribution.under6Months.count}`}
+              />
+              <div
+                className="bg-sky-500 transition-all duration-300"
+                style={{ width: `${data.ageDistribution.sixTo12Months.percentage}%` }}
+                title={`6-12m: ${data.ageDistribution.sixTo12Months.count}`}
+              />
+              <div
+                className="bg-amber-500 transition-all duration-300"
+                style={{ width: `${data.ageDistribution.oneTo3Years.percentage}%` }}
+                title={`1-3y: ${data.ageDistribution.oneTo3Years.count}`}
+              />
+              <div
+                className="bg-purple-500 transition-all duration-300"
+                style={{ width: `${data.ageDistribution.over3Years.percentage}%` }}
+                title={`3y+: ${data.ageDistribution.over3Years.count}`}
+              />
+            </div>
+
+            {/* 4 Age Pills */}
+            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+              <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                  <span>{t('under6mo') || '< 6 months'}</span>
+                </div>
+                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
+                  <span>{data.ageDistribution.under6Months.percentage}%</span>
+                  <span className="text-muted-foreground text-[9.5px] font-normal">
+                    ({data.ageDistribution.under6Months.count})
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                <div className="flex items-center gap-1.5 text-[10px] text-sky-600 dark:text-sky-400">
+                  <span className="size-1.5 rounded-full bg-sky-500" />
+                  <span>{t('sixTo12mo') || '6 - 12 months'}</span>
+                </div>
+                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
+                  <span>{data.ageDistribution.sixTo12Months.percentage}%</span>
+                  <span className="text-muted-foreground text-[9.5px] font-normal">
+                    ({data.ageDistribution.sixTo12Months.count})
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                <div className="flex items-center gap-1.5 text-[10px] text-amber-600 dark:text-amber-400">
+                  <span className="size-1.5 rounded-full bg-amber-500" />
+                  <span>{t('oneTo3yr') || '1 - 3 years'}</span>
+                </div>
+                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
+                  <span>{data.ageDistribution.oneTo3Years.percentage}%</span>
+                  <span className="text-muted-foreground text-[9.5px] font-normal">
+                    ({data.ageDistribution.oneTo3Years.count})
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                <div className="flex items-center gap-1.5 text-[10px] text-purple-600 dark:text-purple-400">
+                  <span className="size-1.5 rounded-full bg-purple-500" />
+                  <span>{t('over3yr') || '3+ years'}</span>
+                </div>
+                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
+                  <span>{data.ageDistribution.over3Years.percentage}%</span>
+                  <span className="text-muted-foreground text-[9.5px] font-normal">
+                    ({data.ageDistribution.over3Years.count})
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ==================== 6. LARGEST FOLDERS ==================== */}
+          {data.topFolders.length > 0 && (
+            <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <h3 className="text-foreground text-xs font-semibold tracking-tight">
+                  {t('largestFoldersTitle') || 'Largest Folders'}
+                </h3>
+                <span className="text-muted-foreground text-[10px]">
+                  {data.totalFolders} total folders
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {data.topFolders.map((folder) => (
+                  <div
+                    key={folder.id}
+                    onClick={() => onNavigateToExplorer?.(folder.title)}
+                    className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1.5 transition-colors"
+                    title={`Click to filter Explorer by folder "${folder.title}"`}
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Folder className="size-3.5 shrink-0 text-amber-500" />
+                        <span className="text-foreground group-hover:text-primary truncate text-[11px] font-medium transition-colors">
+                          {folder.title}
+                        </span>
+                        <span className="text-muted-foreground/60 hidden truncate text-[9.5px] sm:inline">
+                          ({folder.path})
+                        </span>
+                      </div>
+                      <span className="text-muted-foreground group-hover:text-foreground shrink-0 font-mono text-[10.5px]">
+                        {folder.count} links ({folder.percentage}%)
+                      </span>
+                    </div>
+
+                    <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                      <div
+                        className="h-full rounded-full bg-amber-500/70 transition-all duration-300 ease-out"
+                        style={{ width: `${Math.min(100, Math.max(4, folder.percentage))}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ==================== 7. TOP DOMAINS DISTRIBUTION ==================== */}
           <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
             <div className="flex items-center justify-between">
               <h3 className="text-foreground text-xs font-semibold tracking-tight">
@@ -301,6 +808,60 @@ export const Insights: React.FC<InsightsProps> = ({
                 ))}
               </div>
             )}
+          </div>
+
+          {/* ==================== 8. SHARE & EXPORT BAR ==================== */}
+          <div className="border-border/60 bg-muted/20 flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3">
+            <div className="flex items-center gap-1.5 text-xs">
+              <Share2 className="text-muted-foreground size-3.5" />
+              <span className="text-foreground text-[11px] font-medium">
+                {t('exportShareTitle') || 'Share & Export'}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleExportDomainsCsv}
+                className="h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-[0.97]"
+                title="Download domains as CSV"
+              >
+                <FileSpreadsheet className="size-3 text-emerald-500" />
+                <span>{t('exportDomainsCsv') || 'Domains (CSV)'}</span>
+              </Button>
+
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleExportFullJson}
+                className="h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-[0.97]"
+                title="Download full library backup as JSON"
+              >
+                <FileCode className="size-3 text-sky-500" />
+                <span>{t('exportJson') || 'Full Data (JSON)'}</span>
+              </Button>
+
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={handleCopySummary}
+                className="h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-[0.97]"
+                title="Copy text summary to clipboard"
+              >
+                {copiedSummary ? (
+                  <>
+                    <Check className="size-3 text-emerald-500" />
+                    <span>{t('summaryCopied') || 'Copied!'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="size-3" />
+                    <span>{t('copySummary') || 'Copy Summary'}</span>
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       )}

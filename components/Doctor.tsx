@@ -14,8 +14,12 @@ import {
   EyeOff,
   Loader2,
   AlertTriangle,
+  Layers,
+  ShieldCheck,
+  ShieldAlert,
+  Lock,
 } from 'lucide-react';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -29,10 +33,32 @@ import {
   removeEmptyFolder,
   removeBookmarkWithTrash,
   removeMultipleBookmarksWithTrash,
+  findSimilarBookmarks,
+  findTrackingParameters,
+  cleanBookmarkUrl,
+  cleanMultipleBookmarkUrls,
+  findInsecureHttpBookmarks,
+  upgradeBookmarkToHttps,
+  upgradeMultipleBookmarksToHttps,
 } from '@/services/cleaner';
-import type { DuplicateGroup, EmptyFolder, BrokenLinkResult, FlatBookmark } from '@/types';
+import type {
+  DuplicateGroup,
+  EmptyFolder,
+  BrokenLinkResult,
+  FlatBookmark,
+  SimilarGroup,
+  TrackingCleanItem,
+  TrackingCleanOptions,
+} from '@/types';
 
-type DoctorSubTab = 'duplicates' | 'broken' | 'empty';
+export type DoctorSubTab =
+  | 'duplicates'
+  | 'similar'
+  | 'trackers'
+  | 'insecure'
+  | 'broken'
+  | 'empty'
+  | '404';
 
 interface DoctorProps {
   onFixed?: () => void;
@@ -41,13 +67,53 @@ interface DoctorProps {
 
 export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplicates' }) => {
   const { t } = useI18n();
-  const [subTab, setSubTab] = useState<DoctorSubTab>(initialSubTab);
+  const normalizeSubTab = (
+    tab: DoctorSubTab
+  ): 'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty' =>
+    tab === '404' ? 'broken' : tab;
+  const [subTab, setSubTab] = useState<
+    'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty'
+  >(normalizeSubTab(initialSubTab));
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setSubTab(normalizeSubTab(initialSubTab));
+    }
+  }, [initialSubTab]);
 
   // Data states
   const [isLoading, setIsLoading] = useState(true);
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
   const [emptyFolders, setEmptyFolders] = useState<EmptyFolder[]>([]);
   const [allBookmarks, setAllBookmarks] = useState<FlatBookmark[]>([]);
+  const [rawBookmarkTree, setRawBookmarkTree] = useState<chrome.bookmarks.BookmarkTreeNode[]>([]);
+
+  // Similar bookmarks state
+  const [similarGroups, setSimilarGroups] = useState<SimilarGroup[]>([]);
+  const [selectedSimilarIds, setSelectedSimilarIds] = useState<Set<string>>(new Set());
+  const [isDeletingSimilar, setIsDeletingSimilar] = useState(false);
+
+  // Tracking parameters state
+  const [trackingItems, setTrackingItems] = useState<TrackingCleanItem[]>([]);
+  const [trackingOptions, setTrackingOptions] = useState<TrackingCleanOptions>({
+    includeSiteSpecific: true,
+    includeAffiliate: false,
+  });
+  const [isCleaningTrackers, setIsCleaningTrackers] = useState(false);
+  const [cleanTrackersProgress, setCleanTrackersProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const [cleaningSingleTrackerId, setCleaningSingleTrackerId] = useState<string | null>(null);
+
+  // Insecure HTTP bookmarks state
+  const [insecureBookmarks, setInsecureBookmarks] = useState<FlatBookmark[]>([]);
+  const [isUpgradingHttps, setIsUpgradingHttps] = useState(false);
+  const [upgradeHttpsProgress, setUpgradeHttpsProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const [upgradingSingleId, setUpgradingSingleId] = useState<string | null>(null);
 
   // Broken link scanner state
   const [isScanning, setIsScanning] = useState(false);
@@ -118,23 +184,30 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
       const tree = await getBookmarkTree();
+      setRawBookmarkTree(tree);
       const dups = findDuplicates(tree);
       const empties = findEmptyFolders(tree);
       const flats = flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'));
+      const similar = findSimilarBookmarks(tree);
+      const trackers = findTrackingParameters(tree, trackingOptions);
+      const insecures = findInsecureHttpBookmarks(tree);
 
       setDuplicates(dups);
       setEmptyFolders(empties);
       setAllBookmarks(flats);
+      setSimilarGroups(similar);
+      setTrackingItems(trackers);
+      setInsecureBookmarks(insecures);
     } catch (err) {
       console.error('Failed to load doctor data:', err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [trackingOptions]);
 
   useEffect(() => {
     loadData();
@@ -144,7 +217,7 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
         abortControllerRef.current.abort();
       }
     };
-  }, []);
+  }, [loadData]);
 
   // --- Duplicates Actions ---
   const handleResolveGroup = async (
@@ -188,6 +261,232 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
       t('allDuplicatesCleaned', { count: totalRemoved }) ||
         `Cleaned ${totalRemoved} duplicates! Backed up in Recycle Bin.`
     );
+    if (onFixed) onFixed();
+  };
+
+  // --- Similar Bookmarks Actions ---
+  const toggleSelectSimilar = (id: string) => {
+    setSelectedSimilarIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectGroup = (group: SimilarGroup) => {
+    const allGroupSelected = group.items.every((it) => selectedSimilarIds.has(it.id));
+    setSelectedSimilarIds((prev) => {
+      const next = new Set(prev);
+      for (const it of group.items) {
+        if (allGroupSelected) {
+          next.delete(it.id);
+        } else {
+          next.add(it.id);
+        }
+      }
+      return next;
+    });
+  };
+
+  const allSimilarBookmarkIds = useMemo(
+    () => similarGroups.flatMap((g) => g.items.map((it) => it.id)),
+    [similarGroups]
+  );
+
+  const isAllSimilarSelected =
+    allSimilarBookmarkIds.length > 0 &&
+    allSimilarBookmarkIds.every((id) => selectedSimilarIds.has(id));
+
+  const toggleSelectAllSimilar = () => {
+    if (isAllSimilarSelected) {
+      setSelectedSimilarIds(new Set());
+    } else {
+      setSelectedSimilarIds(new Set(allSimilarBookmarkIds));
+    }
+  };
+
+  const handleOpenSelectedSimilar = () => {
+    const selectedBookmarks = similarGroups
+      .flatMap((g) => g.items)
+      .filter((it) => selectedSimilarIds.has(it.id));
+
+    for (const b of selectedBookmarks) {
+      if (b.url) {
+        chrome.tabs.create({ url: b.url, active: false });
+      }
+    }
+    showToast(t('openInTabs') || `Opened ${selectedBookmarks.length} tabs`);
+  };
+
+  const handleDeleteSelectedSimilar = async () => {
+    if (selectedSimilarIds.size === 0 || isDeletingSimilar) return;
+    setIsDeletingSimilar(true);
+    try {
+      const selectedItems = similarGroups
+        .flatMap((g) => g.items)
+        .filter((it) => selectedSimilarIds.has(it.id));
+
+      const count = await removeMultipleBookmarksWithTrash(selectedItems);
+      setSimilarGroups((prev) =>
+        prev
+          .map((g) => ({
+            ...g,
+            items: g.items.filter((it) => !selectedSimilarIds.has(it.id)),
+          }))
+          .filter((g) => g.items.length > 1)
+      );
+      setSelectedSimilarIds(new Set());
+      showToast(t('brokenLinkRemoved') || `Moved ${count} bookmark(s) to Recycle Bin.`);
+      if (onFixed) onFixed();
+    } catch (err) {
+      console.error('Failed to delete selected similar bookmarks:', err);
+    } finally {
+      setIsDeletingSimilar(false);
+    }
+  };
+
+  const handleDeleteSingleSimilar = async (item: FlatBookmark) => {
+    await removeBookmarkWithTrash(item);
+    setSimilarGroups((prev) =>
+      prev
+        .map((g) => ({
+          ...g,
+          items: g.items.filter((it) => it.id !== item.id),
+        }))
+        .filter((g) => g.items.length > 1)
+    );
+    setSelectedSimilarIds((prev) => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
+    showToast(t('brokenLinkRemoved') || 'Moved bookmark to Recycle Bin');
+    if (onFixed) onFixed();
+  };
+
+  // --- Tracking Parameters Actions ---
+  const handleToggleTrackingOption = (key: keyof TrackingCleanOptions) => {
+    const updated = { ...trackingOptions, [key]: !trackingOptions[key] };
+    setTrackingOptions(updated);
+    if (rawBookmarkTree.length > 0) {
+      const freshTrackers = findTrackingParameters(rawBookmarkTree, updated);
+      setTrackingItems(freshTrackers);
+    }
+  };
+
+  const siteSpecificCount = useMemo(() => {
+    if (rawBookmarkTree.length === 0) return 0;
+    const all = findTrackingParameters(rawBookmarkTree, {
+      includeSiteSpecific: true,
+      includeAffiliate: true,
+    });
+    return all.filter((item) =>
+      item.segments.some((s) => s.isRemoved && s.type === 'site-specific')
+    ).length;
+  }, [rawBookmarkTree]);
+
+  const affiliateCount = useMemo(() => {
+    if (rawBookmarkTree.length === 0) return 0;
+    const all = findTrackingParameters(rawBookmarkTree, {
+      includeSiteSpecific: true,
+      includeAffiliate: true,
+    });
+    return all.filter((item) => item.segments.some((s) => s.isRemoved && s.type === 'affiliate'))
+      .length;
+  }, [rawBookmarkTree]);
+
+  const handleCleanSingleTracker = async (item: TrackingCleanItem) => {
+    setCleaningSingleTrackerId(item.bookmark.id);
+    try {
+      const ok = await cleanBookmarkUrl(item.bookmark.id, item.cleanUrl);
+      if (ok) {
+        setTrackingItems((prev) => prev.filter((it) => it.bookmark.id !== item.bookmark.id));
+        showToast(t('cleanedUrlsSuccess', { count: 1 }) || 'Bookmark URL cleaned!');
+        if (onFixed) onFixed();
+      }
+    } catch (err) {
+      console.error('Failed to clean bookmark URL:', err);
+    } finally {
+      setCleaningSingleTrackerId(null);
+    }
+  };
+
+  const handleCleanAllTrackers = async () => {
+    if (trackingItems.length === 0 || isCleaningTrackers) return;
+    setIsCleaningTrackers(true);
+    setCleanTrackersProgress({ current: 0, total: trackingItems.length });
+    try {
+      const itemsToClean = trackingItems.map((it) => ({
+        id: it.bookmark.id,
+        cleanUrl: it.cleanUrl,
+      }));
+      const count = await cleanMultipleBookmarkUrls(itemsToClean, (current, total) =>
+        setCleanTrackersProgress({ current, total })
+      );
+      setTrackingItems([]);
+      showToast(
+        t('cleanedUrlsSuccess', { count }) || `Cleaned ${count} bookmark URLs successfully.`
+      );
+      if (onFixed) onFixed();
+      const tree = await getBookmarkTree();
+      setRawBookmarkTree(tree);
+    } catch (err) {
+      console.error('Failed to clean all tracking parameters:', err);
+    } finally {
+      setIsCleaningTrackers(false);
+      setCleanTrackersProgress(null);
+    }
+  };
+
+  // --- Insecure HTTP Actions ---
+  const handleUpgradeSingleHttps = async (item: FlatBookmark) => {
+    setUpgradingSingleId(item.id);
+    try {
+      const ok = await upgradeBookmarkToHttps(item.id, item.url);
+      if (ok) {
+        setInsecureBookmarks((prev) => prev.filter((b) => b.id !== item.id));
+        showToast(t('upgradedHttpsSuccess', { count: 1 }) || 'Upgraded bookmark to HTTPS!');
+        if (onFixed) onFixed();
+      }
+    } catch (err) {
+      console.error('Failed to upgrade bookmark to HTTPS:', err);
+    } finally {
+      setUpgradingSingleId(null);
+    }
+  };
+
+  const handleUpgradeAllHttps = async () => {
+    if (insecureBookmarks.length === 0 || isUpgradingHttps) return;
+    setIsUpgradingHttps(true);
+    setUpgradeHttpsProgress({ current: 0, total: insecureBookmarks.length });
+    try {
+      const items = insecureBookmarks.map((b) => ({ id: b.id, url: b.url }));
+      const count = await upgradeMultipleBookmarksToHttps(items, (current, total) => {
+        setUpgradeHttpsProgress({ current, total });
+      });
+      setInsecureBookmarks([]);
+      showToast(t('upgradedHttpsSuccess', { count }) || `Upgraded ${count} bookmark(s) to HTTPS!`);
+      if (onFixed) onFixed();
+      const tree = await getBookmarkTree();
+      setRawBookmarkTree(tree);
+    } catch (err) {
+      console.error('Failed to upgrade all bookmarks to HTTPS:', err);
+    } finally {
+      setIsUpgradingHttps(false);
+      setUpgradeHttpsProgress(null);
+    }
+  };
+
+  const handleDismissInsecure = (bookmarkId: string) => {
+    setInsecureBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
+    showToast('Dismissed bookmark from insecure list');
+  };
+
+  const handleRemoveInsecure = async (item: FlatBookmark) => {
+    await removeBookmarkWithTrash(item);
+    setInsecureBookmarks((prev) => prev.filter((b) => b.id !== item.id));
+    showToast(t('brokenLinkRemoved') || 'Removed link to Recycle Bin');
     if (onFixed) onFixed();
   };
 
@@ -312,8 +611,13 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
             <h2 className="text-foreground text-sm font-semibold tracking-tight">
               {t('doctorTitle') || 'Bookmark Doctor'}
             </h2>
-            <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-medium">
-              {duplicates.length + emptyFolders.length + brokenLinks.length}{' '}
+            <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px] font-medium">
+              {duplicates.length +
+                emptyFolders.length +
+                brokenLinks.length +
+                similarGroups.length +
+                trackingItems.length +
+                insecureBookmarks.length}{' '}
               {t('issuesLabel') || 'issues'}
             </Badge>
           </div>
@@ -334,21 +638,22 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
       </div>
 
       {/* Subtab Segmented Control */}
-      <div className="bg-muted/30 border-border/60 grid grid-cols-3 gap-1 rounded-lg border p-1 select-none">
+      <div className="bg-muted/30 border-border/60 grid grid-cols-6 gap-0.5 rounded-lg border p-1 select-none">
         <button
           onClick={() => setSubTab('duplicates')}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-all duration-120 active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'duplicates'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground'
           }`}
+          title={t('tabDuplicates') || 'Duplicates'}
         >
-          <Copy className="size-3.5 text-amber-500" />
-          <span className="truncate">{t('tabDuplicates') || 'Duplicates'}</span>
+          <Copy className="size-3 shrink-0 text-amber-500" />
+          <span className="truncate text-[11px]">{t('tabDuplicates') || 'Duplicates'}</span>
           {totalDuplicateBookmarks > 0 && (
             <Badge
               variant="secondary"
-              className="h-4 bg-amber-500/15 px-1 py-0 text-[9px] font-semibold text-amber-600 dark:text-amber-400"
+              className="h-3.5 shrink-0 bg-amber-500/15 px-1 py-0 text-[8.5px] font-semibold text-amber-600 dark:text-amber-400"
             >
               {totalDuplicateBookmarks}
             </Badge>
@@ -356,17 +661,84 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
         </button>
 
         <button
+          onClick={() => setSubTab('similar')}
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            subTab === 'similar'
+              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+          title={t('tabSimilar') || 'Similar'}
+        >
+          <Layers className="size-3 shrink-0 text-cyan-500" />
+          <span className="truncate text-[11px]">{t('tabSimilar') || 'Similar'}</span>
+          {similarGroups.length > 0 && (
+            <Badge
+              variant="secondary"
+              className="h-3.5 shrink-0 bg-cyan-500/15 px-1 py-0 text-[8.5px] font-semibold text-cyan-600 dark:text-cyan-400"
+            >
+              {similarGroups.length}
+            </Badge>
+          )}
+        </button>
+
+        <button
+          onClick={() => setSubTab('trackers')}
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            subTab === 'trackers'
+              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+          title={t('tabTrackers') || 'Trackers'}
+        >
+          <ShieldCheck className="size-3 shrink-0 text-teal-500" />
+          <span className="truncate text-[11px]">{t('tabTrackers') || 'Trackers'}</span>
+          {trackingItems.length > 0 && (
+            <Badge
+              variant="secondary"
+              className="h-3.5 shrink-0 bg-teal-500/15 px-1 py-0 text-[8.5px] font-semibold text-teal-600 dark:text-teal-400"
+            >
+              {trackingItems.length}
+            </Badge>
+          )}
+        </button>
+
+        <button
+          onClick={() => setSubTab('insecure')}
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            subTab === 'insecure'
+              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+          title={t('tabInsecure') || 'Insecure HTTP'}
+        >
+          <ShieldAlert className="size-3 shrink-0 text-amber-500" />
+          <span className="truncate text-[11px]">{t('tabInsecure') || 'HTTP'}</span>
+          {insecureBookmarks.length > 0 && (
+            <Badge
+              variant="secondary"
+              className="h-3.5 shrink-0 bg-amber-500/15 px-1 py-0 text-[8.5px] font-semibold text-amber-600 dark:text-amber-400"
+            >
+              {insecureBookmarks.length}
+            </Badge>
+          )}
+        </button>
+
+        <button
           onClick={() => setSubTab('broken')}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-all duration-120 active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'broken'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground'
           }`}
+          title={t('tabBroken') || '404 Links'}
         >
-          <Link2Off className="size-3.5 text-rose-500" />
-          <span className="truncate">{t('tabBroken') || '404 Links'}</span>
+          <Link2Off className="size-3 shrink-0 text-rose-500" />
+          <span className="truncate text-[11px]">{t('tabBroken') || '404'}</span>
           {brokenLinks.length > 0 && (
-            <Badge variant="destructive" className="h-4 px-1 py-0 text-[9px] font-semibold">
+            <Badge
+              variant="destructive"
+              className="h-3.5 shrink-0 px-1 py-0 text-[8.5px] font-semibold"
+            >
               {brokenLinks.length}
             </Badge>
           )}
@@ -374,18 +746,19 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
 
         <button
           onClick={() => setSubTab('empty')}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-all duration-120 active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'empty'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground'
           }`}
+          title={t('tabEmptyFolders') || 'Empty Folders'}
         >
-          <FolderX className="size-3.5 text-blue-500" />
-          <span className="truncate">{t('tabEmptyFolders') || 'Empty Folders'}</span>
+          <FolderX className="size-3 shrink-0 text-blue-500" />
+          <span className="truncate text-[11px]">{t('tabEmptyFolders') || 'Empty'}</span>
           {emptyFolders.length > 0 && (
             <Badge
               variant="secondary"
-              className="h-4 bg-blue-500/15 px-1 py-0 text-[9px] font-semibold text-blue-600 dark:text-blue-400"
+              className="h-3.5 shrink-0 bg-blue-500/15 px-1 py-0 text-[8.5px] font-semibold text-blue-600 dark:text-blue-400"
             >
               {emptyFolders.length}
             </Badge>
@@ -395,7 +768,7 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
 
       {/* Toast Feedback */}
       {toastMessage && (
-        <div className="animate-in fade-in flex items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 duration-150 dark:text-emerald-400">
+        <div className="animate-in fade-in slide-in-from-top-1 flex items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] dark:text-emerald-400">
           <CheckCircle2 className="size-3.5 shrink-0" />
           <span className="truncate">{toastMessage}</span>
         </div>
@@ -559,7 +932,628 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
         )}
       </div>
 
-      {/* ===================== TAB 2: BROKEN LINKS ===================== */}
+      {/* ===================== TAB 2: SIMILAR BOOKMARKS ===================== */}
+      <div className={subTab === 'similar' ? 'space-y-3' : 'hidden'}>
+        {/* Header Hero Banner */}
+        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-mono text-[10px] font-semibold tracking-wider text-cyan-600 uppercase dark:text-cyan-400">
+                {t('doctorTitle') || 'DOCTOR'} ·{' '}
+                {t('similarSubtitle') || 'Nearly identical titles or URLs'}
+              </div>
+              <div className="mt-0.5 flex items-center gap-2">
+                <Layers className="size-4 shrink-0 text-cyan-500" />
+                <h3 className="text-foreground text-sm font-bold">
+                  {t('similarTitle') || 'Similar Bookmarks'}
+                </h3>
+                <span className="text-muted-foreground font-mono text-xs">
+                  {t('similarFound', { count: similarGroups.length }) ||
+                    `${similarGroups.length} similarities in total`}
+                </span>
+              </div>
+            </div>
+
+            {/* Batch actions when bookmarks are selected */}
+            {selectedSimilarIds.size > 0 && (
+              <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
+                <Badge
+                  variant="outline"
+                  className="h-6 border-cyan-500/30 px-2 font-mono text-[10px] text-cyan-600 dark:text-cyan-400"
+                >
+                  {selectedSimilarIds.size} selected
+                </Badge>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleOpenSelectedSimilar}
+                  className="h-7 border-cyan-500/30 px-2 text-xs text-cyan-700 hover:bg-cyan-500/10 active:scale-[0.97] dark:text-cyan-300"
+                  title="Open selected bookmarks in tabs"
+                >
+                  <ExternalLink className="mr-1 size-3" />
+                  {t('openInTabs') || 'Open in Tabs'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleDeleteSelectedSimilar}
+                  disabled={isDeletingSimilar}
+                  className="h-7 px-2 text-xs active:scale-[0.97]"
+                >
+                  {isDeletingSimilar ? (
+                    <Loader2 className="mr-1 size-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-1 size-3" />
+                  )}
+                  {t('deleteSelected') || 'Delete Selected'}
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Global Select All Bar (if groups exist) */}
+        {similarGroups.length > 0 && (
+          <div className="text-muted-foreground flex items-center justify-between px-2 text-xs">
+            <label className="flex cursor-pointer items-center gap-2 select-none">
+              <input
+                type="checkbox"
+                checked={isAllSimilarSelected}
+                onChange={toggleSelectAllSimilar}
+                className="border-border size-3.5 cursor-pointer rounded accent-cyan-600"
+              />
+              <span className="text-foreground text-[11px] font-medium">
+                {isAllSimilarSelected ? 'Deselect All' : 'Select All Bookmarks'}
+              </span>
+            </label>
+            <span className="text-muted-foreground font-mono text-[10px]">
+              {similarGroups.reduce((acc, g) => acc + g.items.length, 0)} total links
+            </span>
+          </div>
+        )}
+
+        {/* Group Cards List */}
+        {isLoading ? (
+          <div className="text-muted-foreground flex flex-col items-center justify-center py-12">
+            <div className="border-primary size-5 animate-spin rounded-full border-2 border-t-transparent duration-500" />
+          </div>
+        ) : similarGroups.length === 0 ? (
+          <div className="border-border/60 bg-muted/10 flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-12 text-center">
+            <div className="mb-2 flex size-10 items-center justify-center rounded-full bg-emerald-500/10">
+              <CheckCircle2 className="size-5 text-emerald-500" />
+            </div>
+            <h3 className="text-foreground text-xs font-semibold">
+              {t('noSimilarTitle') || 'No Similar Bookmarks'}
+            </h3>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">
+              {t('noSimilarDesc') || 'No overlapping base URLs or near-duplicate titles detected.'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {similarGroups.map((group) => {
+              const isGroupAllSelected = group.items.every((it) => selectedSimilarIds.has(it.id));
+              return (
+                <div
+                  key={group.id}
+                  className="border-border/60 bg-card overflow-hidden rounded-lg border shadow-2xs"
+                >
+                  {/* Group Header */}
+                  <div className="bg-muted/30 border-border/40 flex items-center justify-between gap-2 border-b px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isGroupAllSelected}
+                        onChange={() => toggleSelectGroup(group)}
+                        className="border-border size-3.5 shrink-0 cursor-pointer rounded accent-cyan-600"
+                      />
+                      <img
+                        src={`https://www.google.com/s2/favicons?domain=${group.domain}&sz=32`}
+                        alt=""
+                        className="size-3.5 shrink-0 rounded-xs"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                      <span
+                        className="text-foreground truncate font-mono text-xs font-semibold"
+                        title={group.baseUrl}
+                      >
+                        {group.baseUrl}
+                      </span>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className="h-4 shrink-0 px-1.5 py-0 font-mono text-[9px]"
+                    >
+                      {group.items.length} links
+                    </Badge>
+                  </div>
+
+                  {/* Group Items */}
+                  <div className="divide-border/30 divide-y">
+                    {group.items.map((item) => {
+                      const isSelected = selectedSimilarIds.has(item.id);
+                      return (
+                        <div
+                          key={item.id}
+                          className={`group hover:bg-muted/40 flex items-center justify-between gap-2.5 px-3 py-2 transition-colors ${
+                            isSelected ? 'bg-cyan-500/5' : ''
+                          }`}
+                        >
+                          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectSimilar(item.id)}
+                              className="border-border size-3.5 shrink-0 cursor-pointer rounded accent-cyan-600"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-foreground truncate text-xs font-medium">
+                                  {item.title || item.domain}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-2">
+                                <span
+                                  className="text-muted-foreground/75 max-w-[240px] truncate font-mono text-[10px]"
+                                  title={item.url}
+                                >
+                                  {item.url}
+                                </span>
+                                {item.path && (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-muted-foreground border-border/50 h-3.5 max-w-[120px] shrink-0 truncate px-1 py-0 text-[8.5px]"
+                                    title={item.path}
+                                  >
+                                    📁 {item.path}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Item Actions */}
+                          <div className="flex shrink-0 items-center gap-1 opacity-80 group-hover:opacity-100">
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                              title={t('openInTabTooltip') || 'Open in new tab'}
+                            >
+                              <ExternalLink className="size-3" />
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSingleSimilar(item)}
+                              className="text-muted-foreground cursor-pointer rounded p-1 transition-all hover:text-rose-500 active:scale-90"
+                              title="Move to Recycle Bin"
+                            >
+                              <Trash2 className="size-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ===================== TAB 3: TRACKING PARAMETERS ===================== */}
+      <div className={subTab === 'trackers' ? 'space-y-3' : 'hidden'}>
+        {/* Header Hero Banner */}
+        <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-mono text-[10px] font-semibold tracking-wider text-teal-600 uppercase dark:text-teal-400">
+                {t('doctorTitle') || 'DOCTOR'} ·{' '}
+                {t('trackersSubtitle') || 'utm_ and other trackers in saved URLs'}
+              </div>
+              <div className="mt-0.5 flex items-center gap-2">
+                <ShieldCheck className="size-4 shrink-0 text-teal-500" />
+                <h3 className="text-foreground text-sm font-bold">
+                  {t('trackersTitle') || 'Tracking Parameters'}
+                </h3>
+                <span className="text-muted-foreground font-mono text-xs">
+                  {t('trackersFound', { count: trackingItems.length }) ||
+                    `${trackingItems.length} bookmarks will be cleaned`}
+                </span>
+              </div>
+            </div>
+
+            {/* Clean All Button */}
+            {trackingItems.length > 0 && (
+              <Button
+                size="sm"
+                onClick={handleCleanAllTrackers}
+                disabled={isCleaningTrackers}
+                className="h-7 cursor-pointer border border-teal-500/40 bg-teal-600 text-xs font-semibold text-white shadow-xs hover:bg-teal-700 active:scale-[0.97] dark:bg-teal-500 dark:hover:bg-teal-600"
+              >
+                {isCleaningTrackers ? (
+                  <>
+                    <Loader2 className="mr-1 size-3 animate-spin" />
+                    <span>
+                      {cleanTrackersProgress
+                        ? `${cleanTrackersProgress.current}/${cleanTrackersProgress.total}`
+                        : t('cleaningUrls') || 'Cleaning...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-1 size-3" />
+                    <span>{t('cleanAllUrlsBtn') || 'Clean All URLs'}</span>
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
+
+          {/* Options Toggles */}
+          <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-teal-500/15 pt-2.5 text-xs select-none">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={trackingOptions.includeSiteSpecific}
+                onChange={() => handleToggleTrackingOption('includeSiteSpecific')}
+                className="border-border size-3.5 cursor-pointer rounded accent-amber-500"
+              />
+              <span className="text-foreground text-[11.5px] font-medium">
+                {t('siteSpecificClean') || 'Site-specific deep clean'}
+              </span>
+              {siteSpecificCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="h-4 bg-amber-500/15 px-1.5 py-0 font-mono text-[9px] font-semibold text-amber-600 dark:text-amber-400"
+                >
+                  {siteSpecificCount}
+                </Badge>
+              )}
+            </label>
+
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={trackingOptions.includeAffiliate}
+                onChange={() => handleToggleTrackingOption('includeAffiliate')}
+                className="border-border size-3.5 cursor-pointer rounded accent-purple-500"
+              />
+              <span className="text-foreground text-[11.5px] font-medium">
+                {t('affiliateTags') || 'Affiliate tags'}
+              </span>
+              {affiliateCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="h-4 bg-purple-500/15 px-1.5 py-0 font-mono text-[9px] font-semibold text-purple-600 dark:text-purple-400"
+                >
+                  {affiliateCount}
+                </Badge>
+              )}
+            </label>
+          </div>
+
+          {/* Visual Legend */}
+          <div className="text-muted-foreground/85 mt-2 flex flex-wrap items-center gap-1.5 text-[10.5px]">
+            <span className="font-medium text-rose-500 line-through">struck through</span>
+            <span>= will be removed</span>
+            <span>·</span>
+            <span className="font-medium text-amber-500 line-through decoration-dotted">
+              dotted
+            </span>
+            <span>= removed only if its toggle above is on</span>
+          </div>
+        </div>
+
+        {/* List of Tracked Bookmarks */}
+        {isLoading ? (
+          <div className="text-muted-foreground flex flex-col items-center justify-center py-12">
+            <div className="border-primary size-5 animate-spin rounded-full border-2 border-t-transparent duration-500" />
+          </div>
+        ) : trackingItems.length === 0 ? (
+          <div className="border-border/60 bg-muted/10 flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-12 text-center">
+            <div className="mb-2 flex size-10 items-center justify-center rounded-full bg-emerald-500/10">
+              <CheckCircle2 className="size-5 text-emerald-500" />
+            </div>
+            <h3 className="text-foreground text-xs font-semibold">
+              {t('noTrackersTitle') || 'URLs Are Clean!'}
+            </h3>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">
+              {t('noTrackersDesc') ||
+                'No marketing trackers (utm, fbclid, gclid) found in your saved URLs.'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {trackingItems.map((item) => {
+              const isCleaningThis = cleaningSingleTrackerId === item.bookmark.id;
+              return (
+                <div
+                  key={item.bookmark.id}
+                  className="group border-border/50 bg-card hover:border-border rounded-lg border p-3 shadow-2xs transition-all duration-120"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      {/* Title & Domain */}
+                      <div className="flex items-center gap-2">
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${item.bookmark.domain}&sz=32`}
+                          alt=""
+                          className="size-3.5 shrink-0 rounded-xs"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                        <span className="text-foreground truncate text-xs font-semibold">
+                          {item.bookmark.title || item.bookmark.domain}
+                        </span>
+                        {item.bookmark.path && (
+                          <Badge
+                            variant="outline"
+                            className="text-muted-foreground border-border/50 h-4 max-w-[130px] shrink-0 truncate px-1.5 py-0 text-[9px]"
+                            title={item.bookmark.path}
+                          >
+                            📁 {item.bookmark.path}
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* Strikethrough URL segments */}
+                      <div className="bg-muted/25 border-border/30 rounded border p-1.5 font-mono text-[10.5px] leading-relaxed break-all">
+                        {item.segments.map((seg, idx) => {
+                          if (!seg.isRemoved) {
+                            return (
+                              <span key={idx} className="text-foreground/80">
+                                {seg.text}
+                              </span>
+                            );
+                          }
+                          if (seg.type === 'site-specific') {
+                            return (
+                              <span
+                                key={idx}
+                                className="rounded-xs bg-amber-500/10 px-0.5 font-semibold text-amber-600 line-through decoration-dotted dark:text-amber-400"
+                                title="Site-specific tracking parameter"
+                              >
+                                {seg.text}
+                              </span>
+                            );
+                          }
+                          if (seg.type === 'affiliate') {
+                            return (
+                              <span
+                                key={idx}
+                                className="rounded-xs bg-purple-500/10 px-0.5 font-semibold text-purple-600 line-through decoration-dashed dark:text-purple-400"
+                                title="Affiliate referral parameter"
+                              >
+                                {seg.text}
+                              </span>
+                            );
+                          }
+                          return (
+                            <span
+                              key={idx}
+                              className="rounded-xs bg-rose-500/10 px-0.5 font-semibold text-rose-600 line-through dark:text-rose-400"
+                              title="Universal tracking parameter"
+                            >
+                              {seg.text}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Quick Clean Action */}
+                    <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isCleaningThis || isCleaningTrackers}
+                        onClick={() => handleCleanSingleTracker(item)}
+                        className="h-7 cursor-pointer border-teal-500/30 px-2 text-xs text-teal-700 hover:bg-teal-500/10 active:scale-[0.97] dark:text-teal-300"
+                        title="Clean tracking parameters from this URL"
+                      >
+                        {isCleaningThis ? (
+                          <Loader2 className="mr-1 size-3 animate-spin" />
+                        ) : (
+                          <Sparkles className="mr-1 size-3" />
+                        )}
+                        <span>Clean</span>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ===================== TAB 4: INSECURE HTTP ===================== */}
+      <div className={subTab === 'insecure' ? 'space-y-3' : 'hidden'}>
+        {/* Header Hero Banner */}
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-mono text-[10px] font-semibold tracking-wider text-amber-600 uppercase dark:text-amber-400">
+                {t('doctorTitle') || 'DOCTOR'} ·{' '}
+                {t('insecureSubtitle') || 'Bookmarks saved over unencrypted HTTP'}
+              </div>
+              <div className="mt-0.5 flex items-center gap-2">
+                <ShieldAlert className="size-4 shrink-0 text-amber-500" />
+                <h3 className="text-foreground text-sm font-bold">
+                  {t('insecureTitle') || 'Insecure HTTP Bookmarks'}
+                </h3>
+                <span className="text-muted-foreground font-mono text-xs">
+                  {t('insecureFound', { count: insecureBookmarks.length }) ||
+                    `${insecureBookmarks.length} insecure links found`}
+                </span>
+              </div>
+            </div>
+
+            {/* Upgrade All Button */}
+            {insecureBookmarks.length > 0 && (
+              <Button
+                size="sm"
+                onClick={handleUpgradeAllHttps}
+                disabled={isUpgradingHttps}
+                className="h-7 cursor-pointer border border-amber-500/40 bg-amber-600 text-xs font-semibold text-white shadow-xs hover:bg-amber-700 active:scale-[0.97] dark:bg-amber-500 dark:hover:bg-amber-600"
+              >
+                {isUpgradingHttps ? (
+                  <>
+                    <Loader2 className="mr-1 size-3 animate-spin" />
+                    <span>
+                      {upgradeHttpsProgress
+                        ? `${upgradeHttpsProgress.current}/${upgradeHttpsProgress.total}`
+                        : t('upgradingHttps') || 'Upgrading...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="mr-1 size-3" />
+                    <span>{t('upgradeAllHttpsBtn') || 'Upgrade All to HTTPS'}</span>
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
+
+          {/* Notice about ignored localhost and private IPs */}
+          <div className="text-muted-foreground/90 mt-3 flex items-center gap-1.5 border-t border-amber-500/15 pt-2.5 text-[10.5px]">
+            <span className="font-medium text-amber-700 dark:text-amber-300">
+              🔒{' '}
+              {t('localExcludedNotice') ||
+                'Localhost, 127.0.0.1, and private LAN IP addresses are automatically excluded.'}
+            </span>
+          </div>
+        </div>
+
+        {/* List of Insecure Bookmarks */}
+        {isLoading ? (
+          <div className="text-muted-foreground flex flex-col items-center justify-center py-12">
+            <div className="border-primary size-5 animate-spin rounded-full border-2 border-t-transparent duration-500" />
+          </div>
+        ) : insecureBookmarks.length === 0 ? (
+          <div className="border-border/60 bg-muted/10 flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-12 text-center">
+            <div className="mb-2 flex size-10 items-center justify-center rounded-full bg-emerald-500/10">
+              <CheckCircle2 className="size-5 text-emerald-500" />
+            </div>
+            <h3 className="text-foreground text-xs font-semibold">
+              {t('noInsecureTitle') || 'All URLs Are Secure!'}
+            </h3>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">
+              {t('noInsecureDesc') ||
+                'All public bookmarks use encrypted HTTPS. No unencrypted HTTP links found.'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {insecureBookmarks.map((item) => {
+              const isUpgradingThis = upgradingSingleId === item.id;
+              const pathPart = item.url.slice(7);
+              return (
+                <div
+                  key={item.id}
+                  className="group border-border/50 bg-card hover:border-border rounded-lg border p-3 shadow-2xs transition-all duration-120"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      {/* Title & Domain */}
+                      <div className="flex items-center gap-2">
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=32`}
+                          alt=""
+                          className="size-3.5 shrink-0 rounded-xs"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                        <span className="text-foreground truncate text-xs font-semibold">
+                          {item.title || item.domain}
+                        </span>
+                        {item.path && (
+                          <Badge
+                            variant="outline"
+                            className="text-muted-foreground border-border/50 h-4 max-w-[130px] shrink-0 truncate px-1.5 py-0 text-[9px]"
+                            title={item.path}
+                          >
+                            📁 {item.path}
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* URL comparison with protocol highlight */}
+                      <div className="bg-muted/25 border-border/30 flex items-center gap-1.5 rounded border p-1.5 font-mono text-[10.5px] leading-relaxed break-all">
+                        <span className="rounded-xs bg-amber-500/10 px-0.5 font-semibold text-amber-600 line-through dark:text-amber-400">
+                          http://
+                        </span>
+                        <span className="text-muted-foreground truncate">{pathPart}</span>
+                        <span className="text-muted-foreground/60 shrink-0">→</span>
+                        <span className="shrink-0 rounded-xs bg-emerald-500/10 px-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                          https://
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex shrink-0 items-center gap-1 pt-0.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isUpgradingThis || isUpgradingHttps}
+                        onClick={() => handleUpgradeSingleHttps(item)}
+                        className="h-7 cursor-pointer border-amber-500/30 px-2 text-xs text-amber-700 hover:bg-amber-500/10 active:scale-[0.97] dark:text-amber-300"
+                        title="Upgrade this bookmark to HTTPS"
+                      >
+                        {isUpgradingThis ? (
+                          <Loader2 className="mr-1 size-3 animate-spin" />
+                        ) : (
+                          <Lock className="mr-1 size-3" />
+                        )}
+                        <span>{t('upgradeSingleBtn') || 'Upgrade'}</span>
+                      </Button>
+
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                        title={t('openInTabTooltip') || 'Open in new tab'}
+                      >
+                        <ExternalLink className="size-3" />
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDismissInsecure(item.id)}
+                        className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                        title="Dismiss (Keep as HTTP)"
+                      >
+                        <EyeOff className="size-3" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveInsecure(item)}
+                        className="text-muted-foreground cursor-pointer rounded p-1 transition-all hover:text-rose-500 active:scale-90"
+                        title="Move to Recycle Bin"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ===================== TAB 5: BROKEN LINKS ===================== */}
       <div className={subTab === 'broken' ? 'space-y-3' : 'hidden'}>
         {/* Scanner Controls Card */}
         <div className="border-border/60 bg-muted/15 space-y-2.5 rounded-lg border p-3">
@@ -905,7 +1899,7 @@ export const Doctor: React.FC<DoctorProps> = ({ onFixed, initialSubTab = 'duplic
         )}
       </div>
 
-      {/* ===================== TAB 3: EMPTY FOLDERS ===================== */}
+      {/* ===================== TAB 6: EMPTY FOLDERS ===================== */}
       <div className={subTab === 'empty' ? 'space-y-3' : 'hidden'}>
         {emptyFolders.length > 0 && (
           <div className="flex items-center justify-between rounded-lg border border-blue-500/20 bg-blue-500/10 p-3">

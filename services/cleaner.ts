@@ -1,4 +1,13 @@
-import type { BrokenLinkResult, DuplicateGroup, EmptyFolder, FlatBookmark } from '@/types';
+import type {
+  BrokenLinkResult,
+  DuplicateGroup,
+  EmptyFolder,
+  FlatBookmark,
+  SimilarGroup,
+  TrackingCleanItem,
+  TrackingCleanOptions,
+  TrackingCleanSegment,
+} from '@/types';
 
 import { flattenBookmarks } from './bookmarks';
 import { addToTrash, addMultipleToTrash } from './trash';
@@ -404,5 +413,389 @@ export async function removeMultipleBookmarksWithTrash(
     }
   }
 
+  return count;
+}
+
+/**
+ * Find similar bookmarks grouped by their common base URL / origin and path endpoint
+ */
+export function findSimilarBookmarks(tree: chrome.bookmarks.BookmarkTreeNode[]): SimilarGroup[] {
+  const bookmarks = flattenBookmarks(tree);
+  const baseMap = new Map<string, FlatBookmark[]>();
+
+  for (const b of bookmarks) {
+    if (!b.url || b.url.startsWith('chrome://')) continue;
+
+    try {
+      const parsed = new URL(b.url);
+      let pathname = parsed.pathname;
+      if (pathname.length > 1 && pathname.endsWith('/')) {
+        pathname = pathname.slice(0, -1);
+      }
+      const baseUrl = `${parsed.origin}${pathname}`;
+
+      const existing = baseMap.get(baseUrl) || [];
+      existing.push(b);
+      baseMap.set(baseUrl, existing);
+    } catch {
+      // Ignore invalid URLs
+    }
+  }
+
+  const groups: SimilarGroup[] = [];
+  for (const [baseUrl, items] of baseMap.entries()) {
+    if (items.length >= 2) {
+      let domain = '';
+      try {
+        domain = new URL(baseUrl).hostname.replace(/^www\./, '');
+      } catch {}
+
+      groups.push({
+        id: baseUrl,
+        baseUrl,
+        domain,
+        items,
+      });
+    }
+  }
+
+  return groups.sort((a, b) => b.items.length - a.items.length);
+}
+
+const UNIVERSAL_KEYS = new Set([
+  'fbclid',
+  'fbadid',
+  'gclid',
+  'gclsrc',
+  'dclid',
+  'wbraid',
+  'gbraid',
+  'twclid',
+  'tw_source',
+  'tw_campaign',
+  'msclkid',
+  'yclid',
+  'ym_debug',
+  'mc_cid',
+  'mc_eid',
+  'igshid',
+  '_hsenc',
+  '_hsmi',
+  'hsctatracking',
+  '_ga',
+  '_gl',
+  'si',
+]);
+
+/**
+ * Scan bookmarks for tracking parameters (universal, site-specific, and affiliate)
+ */
+export function findTrackingParameters(
+  tree: chrome.bookmarks.BookmarkTreeNode[],
+  options: TrackingCleanOptions = { includeSiteSpecific: true, includeAffiliate: false }
+): TrackingCleanItem[] {
+  const bookmarks = flattenBookmarks(tree);
+  const results: TrackingCleanItem[] = [];
+
+  for (const b of bookmarks) {
+    if (!b.url || b.url.startsWith('chrome://')) continue;
+
+    try {
+      const parsed = new URL(b.url);
+      const host = parsed.hostname.toLowerCase();
+      const removedParams: string[] = [];
+      const segments: TrackingCleanSegment[] = [];
+
+      // 1. Amazon path check: /ref=...
+      let pathname = parsed.pathname;
+      let pathRemoved = '';
+      if (options.includeSiteSpecific && host.includes('amazon.')) {
+        const refIdx = pathname.indexOf('/ref=');
+        if (refIdx !== -1) {
+          pathRemoved = pathname.slice(refIdx);
+          pathname = pathname.slice(0, refIdx + 1);
+        }
+      }
+
+      // Collect all query parameters
+      const pairs: [string, string][] = [];
+      parsed.searchParams.forEach((val, key) => {
+        pairs.push([key, val]);
+      });
+
+      const keptPairs: [string, string][] = [];
+      const removedParamTypes = new Map<string, 'universal' | 'site-specific' | 'affiliate'>();
+
+      for (const [key, val] of pairs) {
+        const lower = key.toLowerCase();
+        const isUniversal = lower.startsWith('utm_') || UNIVERSAL_KEYS.has(lower);
+        let isSiteSpecific = false;
+        const isAffiliate =
+          options.includeAffiliate &&
+          (lower === 'tag' || lower === 'ref' || lower.startsWith('aff') || lower === 'referrer');
+
+        if (options.includeSiteSpecific) {
+          if (host.includes('youtube.') || host === 'youtu.be') {
+            if (lower === 'feature' || lower === 'si' || lower === 'ab_channel') {
+              isSiteSpecific = true;
+            }
+          } else if (host.includes('amazon.')) {
+            if (
+              [
+                'ref',
+                'ref_',
+                'crid',
+                'dib',
+                'dib_tag',
+                'keywords',
+                'sprefix',
+                'qid',
+                'sr',
+                'th',
+                'psc',
+              ].includes(lower)
+            ) {
+              isSiteSpecific = true;
+            }
+          } else if (host.includes('twitter.') || host.includes('x.com')) {
+            if (lower === 's' || lower === 't') {
+              isSiteSpecific = true;
+            }
+          } else if (host.includes('aliexpress.')) {
+            if (['spm', 'scm', 'pdp_npi', 'btsid', 'ws_ab_test'].includes(lower)) {
+              isSiteSpecific = true;
+            }
+          } else if (host.includes('medium.') || host.includes('substack.')) {
+            if (['source', 'postpublishedtype', 'publication_id'].includes(lower)) {
+              isSiteSpecific = true;
+            }
+          }
+        }
+
+        if (isUniversal || isSiteSpecific || isAffiliate) {
+          const type = isUniversal ? 'universal' : isSiteSpecific ? 'site-specific' : 'affiliate';
+          removedParams.push(key);
+          removedParamTypes.set(key, type);
+        } else {
+          keptPairs.push([key, val]);
+        }
+      }
+
+      if (removedParams.length === 0 && !pathRemoved) {
+        continue;
+      }
+
+      // Build clean URL
+      const cleanParsed = new URL(b.url);
+      cleanParsed.pathname = pathname;
+      cleanParsed.search =
+        keptPairs.length > 0
+          ? '?' +
+            keptPairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
+          : '';
+      const cleanUrl = cleanParsed.toString();
+
+      // Build visual segments for display
+      const baseUrlPart = `${parsed.origin}${pathname}`;
+      segments.push({ text: baseUrlPart, isRemoved: false });
+
+      if (pathRemoved) {
+        segments.push({ text: pathRemoved, isRemoved: true, type: 'site-specific' });
+      }
+
+      if (pairs.length > 0) {
+        let firstParam = true;
+        for (const [key, val] of pairs) {
+          const prefix = firstParam ? '?' : '&';
+          firstParam = false;
+          const paramStr = `${prefix}${key}=${val}`;
+          const isRem = removedParamTypes.has(key);
+          segments.push({
+            text: paramStr,
+            isRemoved: isRem,
+            type: removedParamTypes.get(key),
+          });
+        }
+      }
+
+      results.push({
+        bookmark: b,
+        originalUrl: b.url,
+        cleanUrl,
+        removedParams,
+        segments,
+      });
+    } catch {
+      // Ignore invalid URLs
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Clean tracking parameters from a single bookmark URL
+ */
+export async function cleanBookmarkUrl(bookmarkId: string, cleanUrl: string): Promise<boolean> {
+  try {
+    await chrome.bookmarks.update(bookmarkId, { url: cleanUrl });
+    return true;
+  } catch (err) {
+    console.error(`Failed to update bookmark ${bookmarkId} URL:`, err);
+    return false;
+  }
+}
+
+/**
+ * Clean tracking parameters from multiple bookmarks in batch with progress
+ */
+export async function cleanMultipleBookmarkUrls(
+  items: { id: string; cleanUrl: string }[],
+  onProgress?: (current: number, total: number) => void
+): Promise<number> {
+  let count = 0;
+  for (const item of items) {
+    try {
+      await chrome.bookmarks.update(item.id, { url: item.cleanUrl });
+      count++;
+      onProgress?.(count, items.length);
+    } catch (err) {
+      console.warn(`Failed to clean URL for bookmark ${item.id}:`, err);
+    }
+  }
+  return count;
+}
+
+/**
+ * Checks if a hostname belongs to localhost, a private LAN IP, or a reserved local development domain
+ */
+export function isLocalOrPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().trim();
+  if (!host) return false;
+
+  // 1. localhost & special local domains
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.test') ||
+    host.endsWith('.example') ||
+    host.endsWith('.invalid') ||
+    host.endsWith('.lan') ||
+    host.endsWith('.home') ||
+    host.endsWith('.home.arpa')
+  ) {
+    return true;
+  }
+
+  // 2. Loopback IPv4 (127.0.0.0/8) & IPv6 (::1)
+  if (
+    host === '127.0.0.1' ||
+    host.startsWith('127.') ||
+    host === '::1' ||
+    host === '[::1]' ||
+    host === '0.0.0.0'
+  ) {
+    return true;
+  }
+
+  // 3. Private IPv4 (RFC 1918)
+  // 10.0.0.0 - 10.255.255.255
+  if (host.startsWith('10.')) {
+    return true;
+  }
+  // 172.16.0.0 - 172.31.255.255
+  const match172 = host.match(/^172\.(\d+)\./);
+  if (match172 && match172[1]) {
+    const secondOctet = parseInt(match172[1], 10);
+    if (secondOctet >= 16 && secondOctet <= 31) {
+      return true;
+    }
+  }
+  // 192.168.0.0 - 192.168.255.255
+  if (host.startsWith('192.168.')) {
+    return true;
+  }
+
+  // 4. Link-local IPv4 (169.254.0.0/16)
+  if (host.startsWith('169.254.')) {
+    return true;
+  }
+
+  // 5. Router standard hostnames
+  if (
+    host === 'router.asus.com' ||
+    host === 'tplinkwifi.net' ||
+    host === 'tplinkrepeater.net' ||
+    host === 'fritz.box' ||
+    host === 'miwifi.com' ||
+    host === 'openwrt.lan'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Tests if a URL is unencrypted HTTP and NOT a local/private development host
+ */
+export function isInsecureHttp(url: string): boolean {
+  if (!url || !url.startsWith('http://')) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:') return false;
+    return !isLocalOrPrivateHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find all bookmarks saved over unencrypted HTTP (excluding localhost & private IP addresses)
+ */
+export function findInsecureHttpBookmarks(
+  tree: chrome.bookmarks.BookmarkTreeNode[]
+): FlatBookmark[] {
+  const bookmarks = flattenBookmarks(tree);
+  return bookmarks.filter((b) => b.url && isInsecureHttp(b.url));
+}
+
+/**
+ * Upgrade a single bookmark URL from http:// to https://
+ */
+export async function upgradeBookmarkToHttps(
+  bookmarkId: string,
+  currentUrl: string
+): Promise<boolean> {
+  try {
+    const httpsUrl = currentUrl.replace(/^http:\/\//i, 'https://');
+    await chrome.bookmarks.update(bookmarkId, { url: httpsUrl });
+    return true;
+  } catch (err) {
+    console.error(`Failed to upgrade bookmark ${bookmarkId} to HTTPS:`, err);
+    return false;
+  }
+}
+
+/**
+ * Upgrade multiple bookmarks to HTTPS in batch with progress
+ */
+export async function upgradeMultipleBookmarksToHttps(
+  items: { id: string; url: string }[],
+  onProgress?: (current: number, total: number) => void
+): Promise<number> {
+  let count = 0;
+  for (const item of items) {
+    try {
+      const httpsUrl = item.url.replace(/^http:\/\//i, 'https://');
+      await chrome.bookmarks.update(item.id, { url: httpsUrl });
+      count++;
+      onProgress?.(count, items.length);
+    } catch (err) {
+      console.warn(`Failed to upgrade bookmark ${item.id} to HTTPS:`, err);
+    }
+  }
   return count;
 }

@@ -54,7 +54,10 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = ({
 
     // Listen to bookmark changes in real-time
     const onCreated = () => loadRecent();
-    const onRemoved = () => loadRecent();
+    const onRemoved = (removedId: string) => {
+      loadRecent();
+      setActiveSuggestion((prev) => (prev?.bookmarkId === removedId ? null : prev));
+    };
     const onChanged = () => loadRecent();
     const onMoved = () => loadRecent();
 

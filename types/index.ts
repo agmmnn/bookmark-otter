@@ -144,6 +144,34 @@ export interface DuplicateGroup {
   items: FlatBookmark[];
 }
 
+// Doctor: Similar bookmark group
+export interface SimilarGroup {
+  id: string;
+  baseUrl: string;
+  domain: string;
+  items: FlatBookmark[];
+}
+
+// Doctor: Tracking Parameter Cleaner
+export interface TrackingCleanSegment {
+  text: string;
+  isRemoved: boolean;
+  type?: 'universal' | 'site-specific' | 'affiliate';
+}
+
+export interface TrackingCleanItem {
+  bookmark: FlatBookmark;
+  originalUrl: string;
+  cleanUrl: string;
+  removedParams: string[];
+  segments: TrackingCleanSegment[];
+}
+
+export interface TrackingCleanOptions {
+  includeSiteSpecific: boolean;
+  includeAffiliate: boolean;
+}
+
 // Doctor: Broken link result
 export type LinkHealthStatus = 'healthy' | 'broken' | 'protected';
 
@@ -176,6 +204,51 @@ export interface InsightsData {
   duplicateCount: number;
   emptyFolderCount: number;
   brokenCount?: number;
+  similarCount?: number;
+  trackingCount?: number;
   topDomains: { domain: string; count: number; percentage: number }[];
   depthAverage: number;
+
+  // Health Score Deductions / Penalties
+  penalties: {
+    duplicates: number;
+    emptyFolders: number;
+    insecureHttp: number;
+    brokenLinks: number;
+  };
+
+  // Library Facts & Trivia
+  oldestBookmark?: {
+    title: string;
+    url: string;
+    dateAdded: number;
+    domain: string;
+  } | null;
+  busiestMonth?: {
+    year: number;
+    month: number; // 0-11
+    count: number;
+  } | null;
+  deepestNesting: number;
+  deepestFolderPath?: string;
+  looseBookmarksCount: number;
+  avgBookmarksPerFolder: number;
+  singleUseDomainsCount: number;
+
+  // Top Largest Folders
+  topFolders: {
+    id: string;
+    title: string;
+    path: string;
+    count: number;
+    percentage: number;
+  }[];
+
+  // Age Distribution
+  ageDistribution: {
+    under6Months: { count: number; percentage: number };
+    sixTo12Months: { count: number; percentage: number };
+    oneTo3Years: { count: number; percentage: number };
+    over3Years: { count: number; percentage: number };
+  };
 }

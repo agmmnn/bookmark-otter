@@ -152,7 +152,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = ({
       {/* Main Card Content */}
       <div
         key={currentItem.bookmarkId}
-        className="animate-in fade-in-50 space-y-2 text-xs duration-150"
+        className="animate-in fade-in-0 space-y-2 text-xs duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]"
       >
         {/* Title Comparison */}
         <div className="bg-card/85 border-border/60 space-y-1 rounded-lg border p-2.5 backdrop-blur-xs transition-colors duration-150">
@@ -231,7 +231,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = ({
               key={it.bookmarkId}
               type="button"
               onClick={() => setCurrentIndex(idx)}
-              className={`cursor-pointer transition-all duration-200 ${
+              className={`cursor-pointer transition-[width,background-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] ${
                 idx === safeIndex
                   ? 'h-1 w-3.5 rounded-full bg-amber-500'
                   : 'h-1 w-1 rounded-full bg-amber-300/80 hover:bg-amber-400 dark:bg-amber-700/80'
@@ -251,7 +251,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = ({
               variant="ghost"
               onClick={() => onDismissAll()}
               disabled={isApplying}
-              className="text-muted-foreground/80 hover:text-destructive h-6 cursor-pointer px-1.5 text-[10px] transition-all duration-150 active:scale-[0.97]"
+              className="text-muted-foreground/80 hover:text-destructive h-6 cursor-pointer px-1.5 text-[10px] transition-[transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]"
             >
               {t('dismissAllBtn')}
             </Button>

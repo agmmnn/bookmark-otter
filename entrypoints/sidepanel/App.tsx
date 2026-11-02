@@ -15,7 +15,7 @@ import { SettingsModal } from '@/components/SettingsModal';
 import { useI18n } from '@/lib/i18n';
 import { getBookmarkTree, restoreSnapshot } from '@/services/bookmarks';
 import {
-  getPendingSuggestions,
+  validateAndCleanPendingSuggestions,
   removePendingSuggestion,
   clearPendingSuggestions,
   updateBadgeCount,
@@ -38,10 +38,13 @@ export const App: React.FC = () => {
   const [isUndoing, setIsUndoing] = useState(false);
   const [isApplyingSuggestion, setIsApplyingSuggestion] = useState(false);
   const [explorerSearchQuery, setExplorerSearchQuery] = useState('');
+  const [doctorSubTab, setDoctorSubTab] = useState<
+    'duplicates' | 'similar' | 'trackers' | 'insecure' | '404' | 'empty'
+  >('duplicates');
 
   const refreshState = async () => {
     const [suggestions, snap, count] = await Promise.all([
-      getPendingSuggestions(),
+      validateAndCleanPendingSuggestions(),
       getLatestSnapshot(),
       getTrashCount(),
     ]);
@@ -54,7 +57,19 @@ export const App: React.FC = () => {
   useEffect(() => {
     refreshState();
 
-    // Listen for suggestions coming from background worker
+    // 1. Direct storage sync for pending suggestions
+    const storageListener = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      areaName: string
+    ) => {
+      if (areaName === 'local' && changes.pendingSuggestions) {
+        const updated = (changes.pendingSuggestions.newValue as PendingSuggestion[]) || [];
+        setPendingSuggestions(updated);
+      }
+    };
+    chrome.storage.onChanged.addListener(storageListener);
+
+    // 2. Listen for suggestions messages coming from background worker
     const messageListener = (msg: any) => {
       if (msg?.type === 'SUGGESTIONS_UPDATED' && Array.isArray(msg.suggestions)) {
         setPendingSuggestions(msg.suggestions);
@@ -64,14 +79,44 @@ export const App: React.FC = () => {
     };
     chrome.runtime.onMessage.addListener(messageListener);
 
+    // 3. Real-time bookmark removal listener (unstar or delete from address bar)
+    const bookmarkRemovedListener = async (id: string, removeInfo?: any) => {
+      const removedUrl = removeInfo?.node?.url;
+      const remaining = await removePendingSuggestion(id, removedUrl);
+      setPendingSuggestions(remaining);
+      await updateBadgeCount(remaining.length);
+      refreshState();
+    };
+    chrome.bookmarks.onRemoved.addListener(bookmarkRemovedListener);
+
     return () => {
+      chrome.storage.onChanged.removeListener(storageListener);
       chrome.runtime.onMessage.removeListener(messageListener);
+      chrome.bookmarks.onRemoved.removeListener(bookmarkRemovedListener);
     };
   }, []);
 
   const handleApplySuggestion = async (suggestion: PendingSuggestion, updatedTitle: string) => {
     setIsApplyingSuggestion(true);
     try {
+      // Check if bookmark still exists in Chrome before applying
+      try {
+        const [node] = await chrome.bookmarks.get(suggestion.bookmarkId);
+        if (!node) {
+          const remaining = await removePendingSuggestion(suggestion.bookmarkId);
+          setPendingSuggestions(remaining);
+          await updateBadgeCount(remaining.length);
+          await refreshState();
+          return;
+        }
+      } catch {
+        const remaining = await removePendingSuggestion(suggestion.bookmarkId);
+        setPendingSuggestions(remaining);
+        await updateBadgeCount(remaining.length);
+        await refreshState();
+        return;
+      }
+
       let targetFolderId = suggestion.suggestedFolderId;
 
       // If AI recommended a new folder, create it first under Bookmarks Bar ('1')
@@ -190,7 +235,7 @@ export const App: React.FC = () => {
         {/* 1. Recent */}
         <button
           onClick={() => setActiveTab('recent')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-all duration-120 active:scale-[0.97] ${
+          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'recent'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
@@ -203,7 +248,7 @@ export const App: React.FC = () => {
         {/* 2. Explorer */}
         <button
           onClick={() => setActiveTab('explorer')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-all duration-120 active:scale-[0.97] ${
+          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'explorer'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
@@ -216,7 +261,7 @@ export const App: React.FC = () => {
         {/* 3. Copilot */}
         <button
           onClick={() => setActiveTab('copilot')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-all duration-120 active:scale-[0.97] ${
+          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'copilot'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
@@ -229,7 +274,7 @@ export const App: React.FC = () => {
         {/* 4. Doctor */}
         <button
           onClick={() => setActiveTab('doctor')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-all duration-120 active:scale-[0.97] ${
+          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'doctor'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
@@ -242,7 +287,7 @@ export const App: React.FC = () => {
         {/* 5. Insights */}
         <button
           onClick={() => setActiveTab('insights')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-all duration-120 active:scale-[0.97] ${
+          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'insights'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
@@ -255,7 +300,7 @@ export const App: React.FC = () => {
         {/* 6. Trash */}
         <button
           onClick={() => setActiveTab('trash')}
-          className={`relative flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-all duration-120 active:scale-[0.97] ${
+          className={`relative flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'trash'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
@@ -299,13 +344,16 @@ export const App: React.FC = () => {
 
         {/* Tab 4: Doctor (Health checks & subtab state preserved) */}
         <div className={activeTab === 'doctor' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <Doctor onFixed={refreshState} />
+          <Doctor onFixed={refreshState} initialSubTab={doctorSubTab} />
         </div>
 
         {/* Tab 5: Insights */}
         <div className={activeTab === 'insights' ? 'flex flex-1 flex-col' : 'hidden'}>
           <Insights
-            onNavigateToDoctor={() => setActiveTab('doctor')}
+            onNavigateToDoctor={(subTab) => {
+              if (subTab) setDoctorSubTab(subTab);
+              setActiveTab('doctor');
+            }}
             onNavigateToCopilot={() => setActiveTab('copilot')}
             onNavigateToExplorer={(query) => {
               setExplorerSearchQuery(query);

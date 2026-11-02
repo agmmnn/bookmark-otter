@@ -67,6 +67,17 @@ export async function setPendingSuggestions(suggestions: PendingSuggestion[]): P
 export async function addPendingSuggestion(
   suggestion: PendingSuggestion
 ): Promise<PendingSuggestion[]> {
+  // Verify bookmark still exists in Chrome before saving
+  if (typeof chrome !== 'undefined' && chrome.bookmarks?.get) {
+    try {
+      const [node] = await chrome.bookmarks.get(suggestion.bookmarkId);
+      if (!node) return await getPendingSuggestions();
+    } catch {
+      // Bookmark was already deleted/unstarred!
+      return await getPendingSuggestions();
+    }
+  }
+
   const current = await getPendingSuggestions();
   const filtered = current.filter((item) => item.bookmarkId !== suggestion.bookmarkId);
   const updated = [...filtered, suggestion];
@@ -74,11 +85,48 @@ export async function addPendingSuggestion(
   return updated;
 }
 
-export async function removePendingSuggestion(bookmarkId: string): Promise<PendingSuggestion[]> {
+export async function removePendingSuggestion(
+  bookmarkId: string,
+  url?: string
+): Promise<PendingSuggestion[]> {
   const current = await getPendingSuggestions();
-  const updated = current.filter((item) => item.bookmarkId !== bookmarkId);
+  const updated = current.filter((item) => {
+    if (item.bookmarkId === bookmarkId) return false;
+    if (url && item.url === url) return false;
+    return true;
+  });
   await setPendingSuggestions(updated);
   return updated;
+}
+
+export async function validateAndCleanPendingSuggestions(): Promise<PendingSuggestion[]> {
+  const current = await getPendingSuggestions();
+  if (current.length === 0) {
+    await updateBadgeCount(0);
+    return [];
+  }
+
+  if (typeof chrome === 'undefined' || !chrome.bookmarks?.get) {
+    return current;
+  }
+
+  const valid: PendingSuggestion[] = [];
+  for (const item of current) {
+    try {
+      const [node] = await chrome.bookmarks.get(item.bookmarkId);
+      if (node) {
+        valid.push(item);
+      }
+    } catch {
+      // Bookmark was deleted or unstarred in Chrome
+    }
+  }
+
+  if (valid.length !== current.length) {
+    await setPendingSuggestions(valid);
+    await updateBadgeCount(valid.length);
+  }
+  return valid;
 }
 
 export async function clearPendingSuggestions(): Promise<void> {

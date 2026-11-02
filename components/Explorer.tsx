@@ -167,20 +167,17 @@ export const Explorer: React.FC<ExplorerProps> = ({
   };
 
   const formatBookmarkDate = (timestamp?: number) => {
-    if (!timestamp) return '—';
-    const now = Date.now();
-    const diffSec = Math.floor((now - timestamp) / 1000);
-    if (diffSec < 60) return t('justNow') || 'just now';
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m`;
-    const diffHours = Math.floor(diffMin / 60);
-    if (diffHours < 24) return `${diffHours}h`;
-    const diffDays = Math.floor(diffHours / 24);
-    if (diffDays < 30) return `${diffDays}d`;
+    if (!timestamp || timestamp <= 0) return '—';
     const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return '—';
+
+    const currentYear = new Date().getFullYear();
+    const isThisYear = d.getFullYear() === currentYear;
+
     return d.toLocaleDateString(lang === 'tr' ? 'tr-TR' : 'en-US', {
       month: 'short',
       day: 'numeric',
+      ...(isThisYear ? {} : { year: 'numeric' }),
     });
   };
 
@@ -394,7 +391,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
           <button
             onClick={() => setViewMode('tree')}
             title={t('treeViewTooltip') || 'Tree View'}
-            className={`flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-all duration-120 active:scale-[0.97] ${
+            className={`flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
               viewMode === 'tree'
                 ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
                 : 'text-muted-foreground hover:text-foreground'
@@ -407,7 +404,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
           <button
             onClick={() => setViewMode('table')}
             title={t('tableViewTooltip') || 'Notion Flat Table'}
-            className={`flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-all duration-120 active:scale-[0.97] ${
+            className={`flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
               viewMode === 'table'
                 ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
                 : 'text-muted-foreground hover:text-foreground'
@@ -503,7 +500,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
           <div className="bg-muted/30 border-border/50 text-muted-foreground grid grid-cols-12 gap-2 border-b px-3 py-2 text-[11px] font-semibold select-none">
             <div
               onClick={() => handleToggleSort('title')}
-              className="hover:text-foreground col-span-5 flex cursor-pointer items-center gap-1 transition-colors"
+              className="hover:text-foreground col-span-4 flex cursor-pointer items-center gap-1 transition-colors"
             >
               <span>{t('colName') || 'Name'}</span>
               {sortField === 'title' ? (
@@ -535,7 +532,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
 
             <div
               onClick={() => handleToggleSort('date')}
-              className="hover:text-foreground col-span-2 flex cursor-pointer items-center gap-1 transition-colors"
+              className="hover:text-foreground col-span-3 flex cursor-pointer items-center gap-1 transition-colors"
             >
               <span>{t('colDate') || 'Date'}</span>
               {sortField === 'date' ? (
@@ -562,7 +559,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
                 className="group hover:bg-muted/20 grid grid-cols-12 items-center gap-2 px-3 py-2 text-xs transition-colors duration-100"
               >
                 {/* Column 1: Title + Favicon */}
-                <div className="col-span-5 flex min-w-0 items-center gap-2">
+                <div className="col-span-4 flex min-w-0 items-center gap-2">
                   <img
                     src={`https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(
                       bookmark.url
@@ -595,7 +592,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
                 </div>
 
                 {/* Column 3: Date */}
-                <div className="col-span-2 flex min-w-0 items-center">
+                <div className="col-span-3 flex min-w-0 items-center">
                   <span
                     className="text-muted-foreground/80 truncate font-mono text-[11px]"
                     title={
