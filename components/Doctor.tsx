@@ -20,6 +20,7 @@ import {
   Lock,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { toast } from 'sonner';
 import { browser } from 'wxt/browser';
 
 import { Badge } from '@/components/ui/badge';
@@ -190,8 +191,6 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     });
   }, [brokenLinks, dismissedBrokenIds, brokenFilter]);
 
-  // Action status toast
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const toggleGroupExpanded = (key: string) => {
@@ -199,8 +198,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   };
 
   const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+    toast.success(msg);
   };
 
   const loadData = useCallback(async () => {
@@ -785,14 +783,6 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           )}
         </button>
       </div>
-
-      {/* Toast Feedback */}
-      {toastMessage && (
-        <div className="animate-in fade-in slide-in-from-top-1 flex items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] dark:text-emerald-400">
-          <CheckCircle2 className="size-3.5 shrink-0" />
-          <span className="truncate">{toastMessage}</span>
-        </div>
-      )}
 
       {/* ===================== TAB 1: DUPLICATES ===================== */}
       {visitedSubTabs.has('duplicates') && (

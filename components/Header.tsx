@@ -1,5 +1,5 @@
 import { cn } from 'cn';
-import { Settings, RotateCcw, Globe, Sun, Moon } from 'lucide-react';
+import { Settings, Globe, Sun, Moon } from 'lucide-react';
 import React from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -7,21 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { useI18n, type Language } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
-import type { TreeSnapshot } from '@/types';
 
 interface HeaderProps {
   onOpenSettings: () => void;
-  latestSnapshot: TreeSnapshot | null;
-  onUndo: () => void;
-  isUndoing?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({
-  onOpenSettings,
-  latestSnapshot,
-  onUndo,
-  isUndoing = false,
-}) => {
+export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
   const { lang, setLang, t } = useI18n();
   const { isDark, toggleTheme } = useTheme();
 
@@ -54,21 +45,6 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Header Actions */}
       <div className="flex items-center gap-1">
-        {/* Undo button - only appears when a snapshot exists */}
-        {latestSnapshot && (
-          <Button
-            size="xs"
-            variant="outline"
-            className="animate-in fade-in-0 zoom-in-95 h-6 cursor-pointer gap-1 border-amber-300 bg-amber-500/10 px-2 text-[10.5px] font-medium text-amber-600 transition-[transform,background-color,border-color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:bg-amber-500/20 active:scale-[0.97] dark:border-amber-800/80 dark:text-amber-400"
-            onClick={onUndo}
-            disabled={isUndoing}
-            title={`${t('undoTooltip')}: ${latestSnapshot.description}`}
-          >
-            <RotateCcw className={`h-3 w-3 ${isUndoing ? 'animate-spin' : ''}`} />
-            <span>{t('undoBtn')}</span>
-          </Button>
-        )}
-
         {/* Language Switcher */}
         <Button
           size="xs"

@@ -1,5 +1,6 @@
 import { Clock, FolderTree, Wand2, Stethoscope, Activity, Trash2 } from 'lucide-react';
 import React, { useState, useEffect, useCallback } from 'react';
+import { toast } from 'sonner';
 
 import '@/assets/tailwind.css';
 import { browser, type Browser } from 'wxt/browser';
@@ -13,6 +14,7 @@ import { PendingSuggestionCard } from '@/components/PendingSuggestionCard';
 import { RecentBookmarks } from '@/components/RecentBookmarks';
 import { RecycleBin } from '@/components/RecycleBin';
 import { SettingsModal } from '@/components/SettingsModal';
+import { Toaster } from '@/components/ui/sonner';
 import { useI18n } from '@/lib/i18n';
 import { getBookmarkTree, restoreSnapshot } from '@/services/bookmarks';
 import {
@@ -20,12 +22,11 @@ import {
   removePendingSuggestion,
   clearPendingSuggestions,
   updateBadgeCount,
-  getLatestSnapshot,
   popLatestSnapshot,
   saveSnapshot,
 } from '@/services/storage';
 import { getTrashCount } from '@/services/trash';
-import type { PendingSuggestion, TreeSnapshot } from '@/types';
+import type { PendingSuggestion, UndoOperation } from '@/types';
 
 type ActiveTab = 'recent' | 'explorer' | 'copilot' | 'doctor' | 'insights' | 'trash';
 
@@ -36,9 +37,7 @@ export const App: React.FC = () => {
   const [visitedTabs, setVisitedTabs] = useState<Set<ActiveTab>>(() => new Set(['recent']));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pendingSuggestions, setPendingSuggestions] = useState<PendingSuggestion[]>([]);
-  const [latestSnapshot, setLatestSnapshot] = useState<TreeSnapshot | null>(null);
   const [trashCount, setTrashCount] = useState<number>(0);
-  const [isUndoing, setIsUndoing] = useState(false);
   const [isApplyingSuggestion, setIsApplyingSuggestion] = useState(false);
   const [explorerSearchQuery, setExplorerSearchQuery] = useState('');
   const [doctorSubTab, setDoctorSubTab] = useState<
@@ -74,13 +73,11 @@ export const App: React.FC = () => {
   );
 
   const refreshState = useCallback(async () => {
-    const [suggestions, snap, count] = await Promise.all([
+    const [suggestions, count] = await Promise.all([
       validateAndCleanPendingSuggestions(),
-      getLatestSnapshot(),
       getTrashCount(),
     ]);
     setPendingSuggestions(suggestions);
-    setLatestSnapshot(snap);
     setTrashCount(count);
     await updateBadgeCount(suggestions.length);
   }, []);
@@ -184,15 +181,62 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUndo = useCallback(async () => {
+    const snap = await popLatestSnapshot();
+    if (!snap) return;
+    try {
+      const restored = await restoreSnapshot(snap);
+      await refreshState();
+      if (restored) {
+        toast.success(t('undoSuccess'));
+      } else {
+        toast.error(t('undoFailed'));
+      }
+    } catch (err) {
+      console.error('Failed to undo:', err);
+      toast.error(t('undoFailed'));
+    }
+  }, [refreshState, t]);
+
+  const handlePlanApplied = useCallback(() => {
+    refreshState();
+    toast.success(t('planAppliedSuccess'), {
+      description: t('undoAvailableDesc'),
+      duration: 10000,
+      action: {
+        label: t('undoBtn'),
+        onClick: () => handleUndo(),
+      },
+    });
+  }, [refreshState, handleUndo, t]);
+
   const handleApplyAll = async (editedTitles: Record<string, string>) => {
     if (pendingSuggestions.length === 0) return;
     setIsApplyingSuggestion(true);
+    const count = pendingSuggestions.length;
     try {
-      // Create backup snapshot before bulk change
+      // Create backup snapshot with atomic inverse operations before bulk change
       const tree = await getBookmarkTree();
-      await saveSnapshot(`Applied ${pendingSuggestions.length} AI suggestions`, tree);
+      const inverseOps: UndoOperation[] = [];
 
       for (const item of pendingSuggestions) {
+        try {
+          const [orig] = await browser.bookmarks.get(item.bookmarkId);
+          if (orig) {
+            inverseOps.push({
+              type: 'RENAME',
+              id: item.bookmarkId,
+              originalTitle: orig.title,
+            });
+            inverseOps.push({
+              type: 'MOVE',
+              bookmarkId: item.bookmarkId,
+              originalParentId: orig.parentId || '1',
+              originalIndex: orig.index,
+            });
+          }
+        } catch {}
+
         let targetFolderId = item.suggestedFolderId;
         if (item.isNewFolder) {
           const folderName = item.newFolderName || item.suggestedFolderPath;
@@ -201,6 +245,10 @@ export const App: React.FC = () => {
             title: folderName,
           });
           targetFolderId = newFolder.id;
+          inverseOps.push({
+            type: 'CREATE_FOLDER',
+            createdFolderId: newFolder.id,
+          });
         }
 
         const titleToUse = editedTitles[item.bookmarkId] ?? item.suggestedTitle;
@@ -215,10 +263,21 @@ export const App: React.FC = () => {
         }
       }
 
+      await saveSnapshot(`Applied ${count} AI suggestions`, tree, inverseOps);
+
       await clearPendingSuggestions();
       setPendingSuggestions([]);
       await updateBadgeCount(0);
       await refreshState();
+
+      toast.success(t('appliedAllSuccess', { count }), {
+        description: t('undoAvailableDesc'),
+        duration: 9000,
+        action: {
+          label: t('undoBtn'),
+          onClick: () => handleUndo(),
+        },
+      });
     } catch (err) {
       console.error('Error applying all suggestions:', err);
     } finally {
@@ -238,28 +297,9 @@ export const App: React.FC = () => {
     await updateBadgeCount(0);
   };
 
-  const handleUndo = async () => {
-    const snap = await popLatestSnapshot();
-    if (!snap) return;
-    setIsUndoing(true);
-    try {
-      await restoreSnapshot(snap);
-      await refreshState();
-    } catch (err) {
-      console.error('Failed to undo:', err);
-    } finally {
-      setIsUndoing(false);
-    }
-  };
-
   return (
     <div className="bg-background text-foreground selection:bg-primary/20 flex min-h-screen flex-col antialiased">
-      <Header
-        onOpenSettings={handleOpenSettings}
-        latestSnapshot={latestSnapshot}
-        onUndo={handleUndo}
-        isUndoing={isUndoing}
-      />
+      <Header onOpenSettings={handleOpenSettings} />
 
       {/* Navigation Tabs - 6 Balanced Compact Modules */}
       <nav className="border-border/50 bg-muted/20 flex items-center gap-0.5 border-b px-1.5 py-1 select-none">
@@ -372,7 +412,7 @@ export const App: React.FC = () => {
         {/* Tab 3: Copilot (State preserved across tab navigation) */}
         {visitedTabs.has('copilot') && (
           <div className={activeTab === 'copilot' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <AICopilot onPlanApplied={refreshState} onOpenSettings={handleOpenSettings} />
+            <AICopilot onPlanApplied={handlePlanApplied} onOpenSettings={handleOpenSettings} />
           </div>
         )}
 
@@ -407,6 +447,8 @@ export const App: React.FC = () => {
         onClose={handleCloseSettings}
         onSettingsSaved={refreshState}
       />
+
+      <Toaster position="bottom-center" />
     </div>
   );
 };

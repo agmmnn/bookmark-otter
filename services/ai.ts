@@ -7,11 +7,12 @@ import { createXai } from '@ai-sdk/xai';
 import { generateObject } from 'ai';
 import { z } from 'zod';
 
-import type { FlatFolder, PendingSuggestion, ReorgPlan } from '@/types';
+import type { FlatFolder, PendingSuggestion, ReorgPlan, BookmarkTreeNode } from '@/types';
 
+import { hydrateReorgPlan } from './bookmarks';
 import { getSettings } from './storage';
 
-function getModel() {
+export function getModel() {
   return async () => {
     const settings = await getSettings();
     const isTr = settings.language === 'tr';
@@ -89,6 +90,11 @@ function getModel() {
       }
     }
   };
+}
+
+export async function getLanguageModel() {
+  const modelFn = getModel();
+  return await modelFn();
 }
 
 /**
@@ -170,6 +176,7 @@ ${folderList}`;
 export async function generateReorganizationPlan(params: {
   userPrompt: string;
   compactTreeDSL: string;
+  tree?: BookmarkTreeNode[];
 }): Promise<ReorgPlan> {
   const modelFn = getModel();
   const model = await modelFn();
@@ -183,43 +190,36 @@ Your mission is to take the user's natural language reorganization request and c
 1. ROOT SHIELD:
    - Root folders (ID '0', '1' Bookmarks Bar, '2' Other Bookmarks) can NEVER be modified, moved, or deleted.
 
-2. EXHAUSTIVE TREE-WIDE REORGANIZATION (CRITICAL):
-   - When the user asks to "organize all", "all bookmarks", "hepsini", "edit all", or general restructuring:
-     Your scope is the ENTIRE BOOKMARK TREE, NOT just loose bookmarks on the Bookmarks Bar!
-   - DEEP INSPECTION OF EXISTING FOLDERS:
-     Analyze the "currentFolder" column for each bookmark in the # BOOKMARKS table.
-     a) Catch Misplaced Bookmarks: If a bookmark inside an existing folder does not belong to that folder's theme (for example, a GitHub developer tool like "antfu/taze" or an article inside a phonetic/language folder like "IPA"), MOVE it to its rightful topical folder (e.g. "💻 Development").
-     b) Dismantle Catch-All / Dump Folders: Folders with names like "other", "needfix", "temp", "yeni klasör", "misc" are temporary dumping grounds. Distribute their bookmarks into proper thematic folders and remove the empty folder using REMOVE action.
-     c) Respect Cohesive Specialized Folders: If an existing folder has a clear, specialized focus (e.g. "IPA" for phonetic charts, "Nis" for a specific project), keep it, but evacuate any foreign bookmarks that were accidentally saved there.
-   - ICON-ONLY & UNNAMED SHORTCUTS:
-     Give clean, recognizable titles to any bookmark with an empty or icon-only title (e.g. "Google", "GitHub", "Twitter / X").
-   - ZERO ABANDONED LOOSE ITEMS:
-     Ensure EVERY loose bookmark on the Bookmarks Bar is moved into an appropriate folder.
+2. TARGETED DIRECTIVES & FOLDER FOCUS (CRITICAL):
+   - If the user prompt or prompt header contains "# TARGET DIRECTIVE" focusing on a specific folder (e.g. "B" or "Dev"):
+     * Your PRIMARY duty is to clean, cluster, and organize the bookmarks inside THAT target folder!
+     * Group related items into clean subfolders (using CREATE_FOLDER with tmpId).
+     * If an item clearly does not belong in this topic, move it out to an appropriate existing folder from # EXISTING FOLDERS.
+     * Do NOT be conservative; actively organize and group the items inside the targeted folder!
 
-3. ID INTEGRITY:
+3. DOMAIN-AWARE & ARCHIVE-WIDE REORGANIZATION:
+   - When asked to organize all, edit all, or when given # MAJOR DOMAIN CLUSTERS:
+     * Focus on organizing LOOSE UNORGANIZED BOOKMARKS into thematic folders matching domain clusters (e.g. GitHub/DevTools into "💻 Development", Crypto into "📈 Crypto & Trading", Design into "🎨 Design & Media").
+     * Dismantle and empty temporary DUMP FOLDERS (e.g. "other", "needfix", "temp", "imported").
+     * Provide a concise 2-5 word "reason" for every action (e.g. "Move to Development folder", "Dismantle temp folder").
+
+4. ID INTEGRITY:
    - "bookmarkId" must strictly be an exact ID from the [BOOKMARKS] table. Never hallucinate or invent IDs.
 
-4. DEPENDENCY ORDER:
+5. DEPENDENCY ORDER:
    - When creating a new folder, assign a unique temporary ID (e.g. "tmp_folder_1").
    - When moving bookmarks into that new folder, set targetFolderId to that exact tmpId.
 
-5. PRAGMATIC DEPTH:
+6. PRAGMATIC DEPTH:
    - Keep folder hierarchies max 2-3 levels deep.
    - Do NOT create single-item micro-folders; group related items logically.
 
-6. AESTHETICS:
+7. AESTHETICS:
    - Mirror the user's existing naming and emoji conventions (e.g. "💻 Development", "📚 Languages & Dictionaries", "🌐 Web & Tools").
 
-7. SUMMARY & LANGUAGE:
+8. SUMMARY & LANGUAGE:
    - Write the "summary" in ${targetLang} (matching the user's interface language).
-   - The summary must be a concise, clear 1-2 sentence overview of planned actions.
-
-8. TARGET MENTIONS (@"target"):
-   - When the user explicitly mentions folders or bookmarks with @ or @"name" (e.g. @"IPA", @"needfix", @"antfu/taze"):
-     a) IMMUNITY / EXCLUSION DIRECTIVES ("dokunma", "don't touch", "leave alone", "skip", "exclude", "ignore"):
-        You MUST NEVER move, rename, or delete the mentioned folder or any bookmarks currently inside it! Leave them 100% untouched.
-     b) TARGETED DIRECTIVES ("move to", "taşı", "put inside", "clean", "sil / delete"):
-        Prioritize and strictly execute the user's specific instruction for that mentioned folder or bookmark.`;
+   - The summary must be a concise, clear 1-2 sentence overview of planned actions.`;
 
   const prompt = `[USER REQUEST]
 "${params.userPrompt}"
@@ -271,20 +271,26 @@ ${params.compactTreeDSL}`;
     prompt,
   });
 
+  const rawPlan: ReorgPlan = {
+    summary: object.summary,
+    actions: object.actions as any,
+    rawDsl: params.compactTreeDSL,
+    rawJson: JSON.stringify(object, null, 2),
+  };
+
+  // 100% Local Hydration Guarantee: Resolve all bookmark titles, URLs, domains, and folder paths
+  const hydratedPlan = params.tree ? hydrateReorgPlan(rawPlan, params.tree) : rawPlan;
+
   // Log full debug payload for developer inspection
   console.group('🦦 [Bookmark Otter] AI Reorganization Debug Info');
   console.log('%c1. USER PROMPT:', 'color: #3b82f6; font-weight: bold;', params.userPrompt);
   console.log(
-    '%c2. COMPACT TREE DSL SENT TO AI:\n',
+    '%c2. TREE DSL SENT TO AI:\n',
     'color: #10b981; font-weight: bold;\n',
     params.compactTreeDSL
   );
-  console.log('%c3. RAW AI RESPONSE OBJECT:', 'color: #f59e0b; font-weight: bold;', object);
+  console.log('%c3. HYDRATED ACTION PLAN:', 'color: #f59e0b; font-weight: bold;', hydratedPlan);
   console.groupEnd();
 
-  return {
-    ...object,
-    rawDsl: params.compactTreeDSL,
-    rawJson: JSON.stringify(object, null, 2),
-  };
+  return hydratedPlan;
 }

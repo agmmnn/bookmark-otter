@@ -23,15 +23,18 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useI18n } from '@/lib/i18n';
-import type { ReorgAction, ReorgPlan } from '@/types';
+import type { ReorgAction, ReorgPlan, FlatBookmark, FlatFolder } from '@/types';
 
 interface DiffPreviewProps {
   plan: ReorgPlan;
   onApply: (selectedActions: ReorgAction[]) => Promise<void>;
   onCancel: () => void;
   isApplying?: boolean;
-  bookmarkMap?: Map<string, { url?: string; domain?: string }>;
+  bookmarkMap?: Map<string, FlatBookmark>;
+  folderMap?: Map<string, FlatFolder>;
   totalBookmarksCount?: number;
+  scopeType?: 'targeted' | 'clustered' | 'full';
+  targetedNames?: string[];
 }
 
 interface MoveItem {
@@ -40,6 +43,7 @@ interface MoveItem {
   bookmarkTitle: string;
   url?: string;
   domain?: string;
+  sourcePath?: string;
   reason?: string;
 }
 
@@ -57,7 +61,10 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
   onCancel,
   isApplying = false,
   bookmarkMap = new Map(),
+  folderMap = new Map(),
   totalBookmarksCount,
+  scopeType,
+  targetedNames,
 }) => {
   const { t } = useI18n();
 
@@ -135,9 +142,15 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
 
         // If target folder is existing (not in CREATE_FOLDER)
         if (!group) {
+          const folderObj = folderMap.get(targetKey) || folderMap.get(act.targetFolderId);
+          const resolvedFolderTitle =
+            act.targetFolderTitle && !/^\d+$/.test(act.targetFolderTitle.trim())
+              ? act.targetFolderTitle
+              : folderObj?.path || folderObj?.title || 'Bookmarks Bar';
+
           group = {
             key: targetKey,
-            title: act.targetFolderTitle || act.targetFolderId || 'Existing Folder',
+            title: resolvedFolderTitle,
             isNewFolder: false,
             moves: [],
           };
@@ -145,27 +158,40 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
         }
 
         const resolvedMeta = bookmarkMap.get(act.bookmarkId);
+        const resolvedTitle =
+          act.bookmarkTitle && !act.bookmarkTitle.startsWith('ID:')
+            ? act.bookmarkTitle
+            : resolvedMeta?.title || resolvedMeta?.domain || `Bookmark ${act.bookmarkId}`;
 
         group.moves.push({
           actionIndex: idx,
           bookmarkId: act.bookmarkId,
-          bookmarkTitle: act.bookmarkTitle || `ID: ${act.bookmarkId}`,
+          bookmarkTitle: resolvedTitle,
           url: resolvedMeta?.url,
           domain: resolvedMeta?.domain,
+          sourcePath: resolvedMeta?.path || 'Bookmarks Bar',
           reason: act.reason,
         });
       } else if (act.action === 'RENAME') {
+        const origB = bookmarkMap.get(act.id);
         renameList.push({
           actionIndex: idx,
-          oldTitle: act.oldTitle,
+          oldTitle: act.oldTitle || origB?.title,
           newTitle: act.newTitle,
           reason: act.reason,
         });
       } else if (act.action === 'REMOVE') {
+        const origB = !act.isFolder ? bookmarkMap.get(act.id) : undefined;
+        const origF = act.isFolder ? folderMap.get(act.id) : undefined;
+        const resolvedTitle =
+          act.title && !/^\d+$/.test(act.title) && !act.title.startsWith('ID:')
+            ? act.title
+            : origF?.path || origB?.title || `Item ${act.id}`;
+
         removeList.push({
           actionIndex: idx,
           id: act.id,
-          title: act.title,
+          title: resolvedTitle,
           isFolder: act.isFolder,
           reason: act.reason,
         });
@@ -179,7 +205,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
       newFolderCount: newFolders,
       moveCount: moves,
     };
-  }, [plan.actions, bookmarkMap]);
+  }, [plan.actions, bookmarkMap, folderMap]);
 
   // Toggle individual action selection
   const toggleIndex = (index: number) => {
@@ -254,12 +280,34 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
 
             {/* Quick Stat Badges */}
             <div className="flex flex-wrap items-center gap-1">
+              {scopeType === 'targeted' && targetedNames && targetedNames.length > 0 && (
+                <Badge
+                  variant="outline"
+                  className="h-4 border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600 dark:text-amber-400"
+                >
+                  🎯 {targetedNames.join(', ')}
+                </Badge>
+              )}
               {totalBookmarksCount && totalBookmarksCount > 0 && (
                 <Badge
                   variant="outline"
                   className="text-muted-foreground border-border h-4 px-1.5 py-0 text-[9px] font-normal"
                 >
                   {totalBookmarksCount} {t('itemsLabel') || 'items'} analyzed
+                </Badge>
+              )}
+              <Badge
+                variant="secondary"
+                className="border-primary/20 bg-primary/10 text-primary h-4 px-1.5 py-0 text-[9px] font-medium"
+              >
+                {t('planStatsActions', { count: plan.actions.length })}
+              </Badge>
+              {moveCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="h-4 border-blue-500/20 bg-blue-500/10 px-1.5 py-0 text-[9px] font-medium text-blue-600 dark:text-blue-400"
+                >
+                  {t('planStatsMoves', { count: moveCount })}
                 </Badge>
               )}
               {newFolderCount > 0 && (
@@ -270,12 +318,12 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
                   {t('planStatsFolders', { count: newFolderCount })}
                 </Badge>
               )}
-              {moveCount > 0 && (
+              {removes.length > 0 && (
                 <Badge
                   variant="secondary"
-                  className="h-4 border-blue-500/20 bg-blue-500/10 px-1.5 py-0 text-[9px] font-medium text-blue-600 dark:text-blue-400"
+                  className="h-4 border-rose-500/20 bg-rose-500/10 px-1.5 py-0 text-[9px] font-medium text-rose-600 dark:text-rose-400"
                 >
-                  {t('planStatsMoves', { count: moveCount })}
+                  {t('planStatsRemoves', { count: removes.length })}
                 </Badge>
               )}
             </div>
@@ -450,16 +498,37 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
                           <Globe className="text-muted-foreground size-3.5 shrink-0" />
                         )}
 
-                        {/* Title & Domain */}
-                        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                          <span className="text-foreground truncate text-[11px] font-medium">
-                            {moveItem.bookmarkTitle}
-                          </span>
-                          {moveItem.domain && (
-                            <span className="text-muted-foreground/70 max-w-[120px] truncate font-mono text-[9.5px]">
-                              {moveItem.domain}
+                        {/* Title & Domain & Before ➔ After indicator */}
+                        <div className="flex min-w-0 flex-1 flex-col py-0.5">
+                          <div className="flex min-w-0 items-baseline gap-1.5">
+                            <span className="text-foreground truncate text-[11.5px] font-medium">
+                              {moveItem.bookmarkTitle}
                             </span>
-                          )}
+                            {moveItem.domain && (
+                              <span className="text-muted-foreground/70 max-w-[120px] truncate font-mono text-[9px]">
+                                {moveItem.domain}
+                              </span>
+                            )}
+                          </div>
+                          {/* Before ➔ After & Reason */}
+                          <div className="text-muted-foreground/80 flex items-center gap-1.5 truncate text-[9.5px]">
+                            {moveItem.sourcePath && (
+                              <span className="text-muted-foreground/60 max-w-[140px] truncate line-through">
+                                {moveItem.sourcePath}
+                              </span>
+                            )}
+                            {moveItem.sourcePath && (
+                              <span className="text-muted-foreground/40 shrink-0">➔</span>
+                            )}
+                            <span className="text-foreground/90 max-w-[140px] truncate font-medium">
+                              {group.title}
+                            </span>
+                            {moveItem.reason && (
+                              <span className="text-primary/75 max-w-[180px] shrink-0 truncate italic">
+                                • {moveItem.reason}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );

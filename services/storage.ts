@@ -170,6 +170,8 @@ export async function setPendingSuggestion(suggestion: PendingSuggestion | null)
   }
 }
 
+export const SNAPSHOT_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL
+
 export async function saveSnapshot(
   description: string,
   tree?: BookmarkTreeNode[],
@@ -191,9 +193,24 @@ export async function saveSnapshot(
   return snapshot.id;
 }
 
+export async function clearSnapshots(): Promise<void> {
+  await browser.storage.local.remove('snapshots');
+}
+
 export async function getSnapshots(): Promise<TreeSnapshot[]> {
   const data = await browser.storage.local.get('snapshots');
-  return (data.snapshots as TreeSnapshot[]) || [];
+  const snapshots: TreeSnapshot[] = (data.snapshots as TreeSnapshot[]) || [];
+  const now = Date.now();
+  // Filter out any snapshots older than TTL
+  const valid = snapshots.filter((s) => now - s.timestamp <= SNAPSHOT_TTL_MS);
+  if (valid.length !== snapshots.length) {
+    if (valid.length === 0) {
+      await browser.storage.local.remove('snapshots');
+    } else {
+      await browser.storage.local.set({ snapshots: valid });
+    }
+  }
+  return valid;
 }
 
 export async function getLatestSnapshot(): Promise<TreeSnapshot | null> {
@@ -202,10 +219,13 @@ export async function getLatestSnapshot(): Promise<TreeSnapshot | null> {
 }
 
 export async function popLatestSnapshot(): Promise<TreeSnapshot | null> {
-  const data = await browser.storage.local.get('snapshots');
-  const snapshots: TreeSnapshot[] = (data.snapshots as TreeSnapshot[]) || [];
+  const snapshots = await getSnapshots();
   if (snapshots.length === 0) return null;
   const latest = snapshots.shift()!;
-  await browser.storage.local.set({ snapshots });
+  if (snapshots.length === 0) {
+    await browser.storage.local.remove('snapshots');
+  } else {
+    await browser.storage.local.set({ snapshots });
+  }
   return latest;
 }

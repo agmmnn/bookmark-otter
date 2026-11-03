@@ -7,16 +7,22 @@ import {
   CornerDownLeft,
   Edit2,
   AtSign,
+  Sparkles,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/lib/i18n';
+import {
+  runMultiStepAgentHarness,
+  shouldUseAgentHarness,
+  type AgentProgress,
+} from '@/services/agentHarness';
 import { generateReorganizationPlan } from '@/services/ai';
 import {
   getBookmarkTree,
-  getCompactTreeDSL,
+  getSmartTreeDSL,
   flattenBookmarks,
   getAllFolders,
   executePlan,
@@ -39,11 +45,14 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   const { t, lang } = useI18n();
   const [promptText, setPromptText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [agentProgress, setAgentProgress] = useState<AgentProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentPlan, setCurrentPlan] = useState<ReorgPlan | null>(null);
-  const [bookmarkMap, setBookmarkMap] = useState<Map<string, { url?: string; domain?: string }>>(
-    new Map()
-  );
+  const [bookmarkMap, setBookmarkMap] = useState<Map<string, FlatBookmark>>(new Map());
+  const [folderMap, setFolderMap] = useState<Map<string, FlatFolder>>(new Map());
+  const [analyzedCount, setAnalyzedCount] = useState<number>(0);
+  const [scopeType, setScopeType] = useState<'targeted' | 'clustered' | 'full'>('full');
+  const [targetedNames, setTargetedNames] = useState<string[]>([]);
   const [isApplying, setIsApplying] = useState(false);
   const [appliedSuccess, setAppliedSuccess] = useState<{
     count: number;
@@ -217,22 +226,54 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         return;
       }
 
-      // 1. Get compact tree DSL (~85% token saving) & build bookmark map for favicons
+      // 1. Get smart tree DSL with @mention scoping & domain pre-clustering
       const tree = await getBookmarkTree();
       const flats = flattenBookmarks(tree);
-      const bMap = new Map<string, { url?: string; domain?: string }>();
+      const folders = getAllFolders(tree);
+
+      const bMap = new Map<string, FlatBookmark>();
       for (const b of flats) {
-        bMap.set(b.id, { url: b.url, domain: b.domain });
+        bMap.set(b.id, b);
       }
       setBookmarkMap(bMap);
 
-      const compactDSL = getCompactTreeDSL(tree);
+      const fMap = new Map<string, FlatFolder>();
+      for (const f of folders) {
+        fMap.set(f.id, f);
+      }
+      setFolderMap(fMap);
 
-      // 2. Call AI SDK to generate structured plan
-      const plan = await generateReorganizationPlan({
-        userPrompt,
-        compactTreeDSL: compactDSL,
-      });
+      const smartDsl = getSmartTreeDSL(tree, userPrompt);
+      setAnalyzedCount(smartDsl.analyzedCount);
+      setScopeType(smartDsl.scopeType);
+      setTargetedNames(smartDsl.targetFolderNames || []);
+
+      // 2. Select execution mode: Multi-Step Agent Harness (for global library) or Scoped Single-Shot
+      const useHarness = shouldUseAgentHarness(userPrompt, flats.length, smartDsl.scopeType);
+      let plan: ReorgPlan;
+
+      if (useHarness) {
+        setAgentProgress({
+          phase: 'architect',
+          message:
+            lang === 'tr'
+              ? 'Mimar: Kütüphane analizi yapılıyor ve taksonomi tasarlanıyor...'
+              : 'Architect: Analyzing library structure and designing taxonomy...',
+          percentage: 10,
+        });
+
+        plan = await runMultiStepAgentHarness({
+          userPrompt,
+          tree,
+          onProgress: (p) => setAgentProgress(p),
+        });
+      } else {
+        plan = await generateReorganizationPlan({
+          userPrompt,
+          compactTreeDSL: smartDsl.dsl,
+          tree,
+        });
+      }
 
       setCurrentPlan(plan);
     } catch (err: any) {
@@ -240,6 +281,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       setError(err?.message || 'Plan generation failed.');
     } finally {
       setIsLoading(false);
+      setAgentProgress(null);
     }
   };
 
@@ -339,11 +381,64 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         <DiffPreview
           plan={currentPlan}
           bookmarkMap={bookmarkMap}
-          totalBookmarksCount={availableBookmarks.length}
+          folderMap={folderMap}
+          totalBookmarksCount={analyzedCount || availableBookmarks.length}
+          scopeType={scopeType}
+          targetedNames={targetedNames}
           onApply={handleApplyPlan}
           onCancel={() => setCurrentPlan(null)}
           isApplying={isApplying}
         />
+      )}
+
+      {/* Real-time Agent Harness Progress Card */}
+      {isLoading && (
+        <div className="border-border/70 from-card via-card to-primary/5 animate-in fade-in-0 zoom-in-95 space-y-2 rounded-xl border bg-gradient-to-br p-3 shadow-xs duration-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="bg-primary/10 text-primary flex size-7 items-center justify-center rounded-lg">
+                <Sparkles className="size-4 animate-spin duration-1000" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-foreground text-xs font-semibold">
+                    {agentProgress ? t('agentHarnessBadge') : t('copilotBadge')}
+                  </span>
+                  {agentProgress && (
+                    <span className="bg-primary/10 text-primary border-primary/20 py-0.2 rounded border px-1.5 font-mono text-[9px] font-medium">
+                      {agentProgress.phase === 'architect'
+                        ? t('agentPhaseArchitect')
+                        : agentProgress.phase === 'routing'
+                          ? t('agentPhaseRouting')
+                          : agentProgress.phase === 'synthesizing'
+                            ? t('agentPhaseSynthesizing')
+                            : t('agentPhaseDone')}
+                    </span>
+                  )}
+                </div>
+                <p className="text-muted-foreground truncate text-[11px] leading-tight">
+                  {agentProgress?.message ||
+                    (lang === 'tr'
+                      ? 'Eylem planı hazırlanıyor...'
+                      : 'Generating reorganization plan...')}
+                </p>
+              </div>
+            </div>
+            {agentProgress?.percentage !== undefined && (
+              <span className="text-primary font-mono text-xs font-bold">
+                %{agentProgress.percentage}
+              </span>
+            )}
+          </div>
+
+          {/* Animated Progress Bar */}
+          <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+            <div
+              className="bg-primary h-full rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${agentProgress?.percentage ?? 45}%` }}
+            />
+          </div>
+        </div>
       )}
 
       {/* Prompt Input Form */}
@@ -434,6 +529,12 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                 {(lang === 'tr'
                   ? [
                       {
+                        icon: '⚡',
+                        label: 'Tümünü Düzenle',
+                        prompt:
+                          'Tüm yer imlerimi analiz et ve 6-8 ana tematik klasör altında baştan sona düzenle.',
+                      },
+                      {
                         icon: '🧹',
                         label: 'Dağınıkları toparla',
                         prompt:
@@ -458,6 +559,12 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                       },
                     ]
                   : [
+                      {
+                        icon: '⚡',
+                        label: 'Edit All',
+                        prompt:
+                          'Analyze all bookmarks and reorganize the entire library into cohesive thematic folders.',
+                      },
                       {
                         icon: '🧹',
                         label: 'Triage loose bookmarks',
