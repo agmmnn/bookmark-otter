@@ -32,7 +32,10 @@ interface AICopilotProps {
   onOpenSettings: () => void;
 }
 
-export const AICopilot: React.FC<AICopilotProps> = ({ onPlanApplied, onOpenSettings }) => {
+export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot({
+  onPlanApplied,
+  onOpenSettings,
+}) {
   const { t, lang } = useI18n();
   const [promptText, setPromptText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -502,4 +505,4 @@ export const AICopilot: React.FC<AICopilotProps> = ({ onPlanApplied, onOpenSetti
       )}
     </div>
   );
-};
+});

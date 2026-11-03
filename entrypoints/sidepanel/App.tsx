@@ -1,7 +1,8 @@
 import { Clock, FolderTree, Wand2, Stethoscope, Activity, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 import '@/assets/tailwind.css';
-import React, { useState, useEffect } from 'react';
+import { browser, type Browser } from 'wxt/browser';
 
 import { AICopilot } from '@/components/AICopilot';
 import { Doctor } from '@/components/Doctor';
@@ -31,6 +32,8 @@ type ActiveTab = 'recent' | 'explorer' | 'copilot' | 'doctor' | 'insights' | 'tr
 export const App: React.FC = () => {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<ActiveTab>('recent');
+  // Lazy mount on demand: only mount tabs the user actually opens to guarantee instant <50ms TTI
+  const [visitedTabs, setVisitedTabs] = useState<Set<ActiveTab>>(() => new Set(['recent']));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pendingSuggestions, setPendingSuggestions] = useState<PendingSuggestion[]>([]);
   const [latestSnapshot, setLatestSnapshot] = useState<TreeSnapshot | null>(null);
@@ -42,7 +45,35 @@ export const App: React.FC = () => {
     'duplicates' | 'similar' | 'trackers' | 'insecure' | '404' | 'empty'
   >('duplicates');
 
-  const refreshState = async () => {
+  const handleTabChange = useCallback((tab: ActiveTab) => {
+    setActiveTab(tab);
+    setVisitedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+  }, []);
+
+  const handleOpenSettings = useCallback(() => setIsSettingsOpen(true), []);
+  const handleCloseSettings = useCallback(() => setIsSettingsOpen(false), []);
+
+  const handleNavigateToDoctor = useCallback(
+    (subTab?: 'duplicates' | 'similar' | 'trackers' | 'insecure' | '404' | 'empty') => {
+      if (subTab) setDoctorSubTab(subTab);
+      handleTabChange('doctor');
+    },
+    [handleTabChange]
+  );
+
+  const handleNavigateToCopilot = useCallback(() => {
+    handleTabChange('copilot');
+  }, [handleTabChange]);
+
+  const handleNavigateToExplorer = useCallback(
+    (query: string) => {
+      setExplorerSearchQuery(query);
+      handleTabChange('explorer');
+    },
+    [handleTabChange]
+  );
+
+  const refreshState = useCallback(async () => {
     const [suggestions, snap, count] = await Promise.all([
       validateAndCleanPendingSuggestions(),
       getLatestSnapshot(),
@@ -52,14 +83,14 @@ export const App: React.FC = () => {
     setLatestSnapshot(snap);
     setTrashCount(count);
     await updateBadgeCount(suggestions.length);
-  };
+  }, []);
 
   useEffect(() => {
     refreshState();
 
     // 1. Direct storage sync for pending suggestions
     const storageListener = (
-      changes: { [key: string]: chrome.storage.StorageChange },
+      changes: { [key: string]: Browser.storage.StorageChange },
       areaName: string
     ) => {
       if (areaName === 'local' && changes.pendingSuggestions) {
@@ -67,7 +98,7 @@ export const App: React.FC = () => {
         setPendingSuggestions(updated);
       }
     };
-    chrome.storage.onChanged.addListener(storageListener);
+    browser.storage.onChanged.addListener(storageListener);
 
     // 2. Listen for suggestions messages coming from background worker
     const messageListener = (msg: any) => {
@@ -77,7 +108,7 @@ export const App: React.FC = () => {
         refreshState();
       }
     };
-    chrome.runtime.onMessage.addListener(messageListener);
+    browser.runtime.onMessage.addListener(messageListener);
 
     // 3. Real-time bookmark removal listener (unstar or delete from address bar)
     const bookmarkRemovedListener = async (id: string, removeInfo?: any) => {
@@ -87,21 +118,21 @@ export const App: React.FC = () => {
       await updateBadgeCount(remaining.length);
       refreshState();
     };
-    chrome.bookmarks.onRemoved.addListener(bookmarkRemovedListener);
+    browser.bookmarks.onRemoved.addListener(bookmarkRemovedListener);
 
     return () => {
-      chrome.storage.onChanged.removeListener(storageListener);
-      chrome.runtime.onMessage.removeListener(messageListener);
-      chrome.bookmarks.onRemoved.removeListener(bookmarkRemovedListener);
+      browser.storage.onChanged.removeListener(storageListener);
+      browser.runtime.onMessage.removeListener(messageListener);
+      browser.bookmarks.onRemoved.removeListener(bookmarkRemovedListener);
     };
-  }, []);
+  }, [refreshState]);
 
   const handleApplySuggestion = async (suggestion: PendingSuggestion, updatedTitle: string) => {
     setIsApplyingSuggestion(true);
     try {
       // Check if bookmark still exists in Chrome before applying
       try {
-        const [node] = await chrome.bookmarks.get(suggestion.bookmarkId);
+        const [node] = await browser.bookmarks.get(suggestion.bookmarkId);
         if (!node) {
           const remaining = await removePendingSuggestion(suggestion.bookmarkId);
           setPendingSuggestions(remaining);
@@ -122,7 +153,7 @@ export const App: React.FC = () => {
       // If AI recommended a new folder, create it first under Bookmarks Bar ('1')
       if (suggestion.isNewFolder) {
         const folderName = suggestion.newFolderName || suggestion.suggestedFolderPath;
-        const newFolder = await chrome.bookmarks.create({
+        const newFolder = await browser.bookmarks.create({
           parentId: '1',
           title: folderName,
         });
@@ -130,13 +161,13 @@ export const App: React.FC = () => {
       }
 
       // 1. Update bookmark title
-      await chrome.bookmarks.update(suggestion.bookmarkId, {
+      await browser.bookmarks.update(suggestion.bookmarkId, {
         title: updatedTitle,
       });
 
       // 2. Move to target folder
       if (targetFolderId && targetFolderId !== 'NEW') {
-        await chrome.bookmarks.move(suggestion.bookmarkId, {
+        await browser.bookmarks.move(suggestion.bookmarkId, {
           parentId: targetFolderId,
         });
       }
@@ -165,7 +196,7 @@ export const App: React.FC = () => {
         let targetFolderId = item.suggestedFolderId;
         if (item.isNewFolder) {
           const folderName = item.newFolderName || item.suggestedFolderPath;
-          const newFolder = await chrome.bookmarks.create({
+          const newFolder = await browser.bookmarks.create({
             parentId: '1',
             title: folderName,
           });
@@ -173,12 +204,12 @@ export const App: React.FC = () => {
         }
 
         const titleToUse = editedTitles[item.bookmarkId] ?? item.suggestedTitle;
-        await chrome.bookmarks.update(item.bookmarkId, {
+        await browser.bookmarks.update(item.bookmarkId, {
           title: titleToUse,
         });
 
         if (targetFolderId && targetFolderId !== 'NEW') {
-          await chrome.bookmarks.move(item.bookmarkId, {
+          await browser.bookmarks.move(item.bookmarkId, {
             parentId: targetFolderId,
           });
         }
@@ -224,7 +255,7 @@ export const App: React.FC = () => {
   return (
     <div className="bg-background text-foreground selection:bg-primary/20 flex min-h-screen flex-col antialiased">
       <Header
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         latestSnapshot={latestSnapshot}
         onUndo={handleUndo}
         isUndoing={isUndoing}
@@ -234,7 +265,7 @@ export const App: React.FC = () => {
       <nav className="border-border/50 bg-muted/20 flex items-center gap-0.5 border-b px-1.5 py-1 select-none">
         {/* 1. Recent */}
         <button
-          onClick={() => setActiveTab('recent')}
+          onClick={() => handleTabChange('recent')}
           className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'recent'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
@@ -247,7 +278,7 @@ export const App: React.FC = () => {
 
         {/* 2. Explorer */}
         <button
-          onClick={() => setActiveTab('explorer')}
+          onClick={() => handleTabChange('explorer')}
           className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'explorer'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
@@ -260,7 +291,7 @@ export const App: React.FC = () => {
 
         {/* 3. Copilot */}
         <button
-          onClick={() => setActiveTab('copilot')}
+          onClick={() => handleTabChange('copilot')}
           className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'copilot'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
@@ -273,7 +304,7 @@ export const App: React.FC = () => {
 
         {/* 4. Doctor */}
         <button
-          onClick={() => setActiveTab('doctor')}
+          onClick={() => handleTabChange('doctor')}
           className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'doctor'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
@@ -286,7 +317,7 @@ export const App: React.FC = () => {
 
         {/* 5. Insights */}
         <button
-          onClick={() => setActiveTab('insights')}
+          onClick={() => handleTabChange('insights')}
           className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'insights'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
@@ -299,7 +330,7 @@ export const App: React.FC = () => {
 
         {/* 6. Trash */}
         <button
-          onClick={() => setActiveTab('trash')}
+          onClick={() => handleTabChange('trash')}
           className={`relative flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'trash'
               ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
@@ -325,52 +356,55 @@ export const App: React.FC = () => {
         )}
 
         {/* Tab 1: Recent */}
-        <div className={activeTab === 'recent' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <RecentBookmarks
-            onBookmarkChanged={refreshState}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-          />
-        </div>
+        {visitedTabs.has('recent') && (
+          <div className={activeTab === 'recent' ? 'flex flex-1 flex-col' : 'hidden'}>
+            <RecentBookmarks onBookmarkChanged={refreshState} onOpenSettings={handleOpenSettings} />
+          </div>
+        )}
 
         {/* Tab 2: Explorer */}
-        <div className={activeTab === 'explorer' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <Explorer onBookmarkChanged={refreshState} initialSearchQuery={explorerSearchQuery} />
-        </div>
+        {visitedTabs.has('explorer') && (
+          <div className={activeTab === 'explorer' ? 'flex flex-1 flex-col' : 'hidden'}>
+            <Explorer onBookmarkChanged={refreshState} initialSearchQuery={explorerSearchQuery} />
+          </div>
+        )}
 
         {/* Tab 3: Copilot (State preserved across tab navigation) */}
-        <div className={activeTab === 'copilot' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <AICopilot onPlanApplied={refreshState} onOpenSettings={() => setIsSettingsOpen(true)} />
-        </div>
+        {visitedTabs.has('copilot') && (
+          <div className={activeTab === 'copilot' ? 'flex flex-1 flex-col' : 'hidden'}>
+            <AICopilot onPlanApplied={refreshState} onOpenSettings={handleOpenSettings} />
+          </div>
+        )}
 
         {/* Tab 4: Doctor (Health checks & subtab state preserved) */}
-        <div className={activeTab === 'doctor' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <Doctor onFixed={refreshState} initialSubTab={doctorSubTab} />
-        </div>
+        {visitedTabs.has('doctor') && (
+          <div className={activeTab === 'doctor' ? 'flex flex-1 flex-col' : 'hidden'}>
+            <Doctor onFixed={refreshState} initialSubTab={doctorSubTab} />
+          </div>
+        )}
 
         {/* Tab 5: Insights */}
-        <div className={activeTab === 'insights' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <Insights
-            onNavigateToDoctor={(subTab) => {
-              if (subTab) setDoctorSubTab(subTab);
-              setActiveTab('doctor');
-            }}
-            onNavigateToCopilot={() => setActiveTab('copilot')}
-            onNavigateToExplorer={(query) => {
-              setExplorerSearchQuery(query);
-              setActiveTab('explorer');
-            }}
-          />
-        </div>
+        {visitedTabs.has('insights') && (
+          <div className={activeTab === 'insights' ? 'flex flex-1 flex-col' : 'hidden'}>
+            <Insights
+              onNavigateToDoctor={handleNavigateToDoctor}
+              onNavigateToCopilot={handleNavigateToCopilot}
+              onNavigateToExplorer={handleNavigateToExplorer}
+            />
+          </div>
+        )}
 
         {/* Tab 6: Recycle Bin */}
-        <div className={activeTab === 'trash' ? 'flex flex-1 flex-col' : 'hidden'}>
-          <RecycleBin onRestored={refreshState} />
-        </div>
+        {visitedTabs.has('trash') && (
+          <div className={activeTab === 'trash' ? 'flex flex-1 flex-col' : 'hidden'}>
+            <RecycleBin onRestored={refreshState} />
+          </div>
+        )}
       </main>
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={handleCloseSettings}
         onSettingsSaved={refreshState}
       />
     </div>

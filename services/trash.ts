@@ -1,4 +1,6 @@
-import type { TrashItem } from '@/types';
+import { browser } from 'wxt/browser';
+
+import type { TrashItem, BookmarkTreeNode } from '@/types';
 
 const STORAGE_KEY = 'recycle_bin_items';
 export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
@@ -8,7 +10,7 @@ export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in millisecon
  */
 export async function getTrashItems(): Promise<TrashItem[]> {
   try {
-    const data = await chrome.storage.local.get(STORAGE_KEY);
+    const data = await browser.storage.local.get(STORAGE_KEY);
     const rawItems: TrashItem[] = (data[STORAGE_KEY] as TrashItem[]) || [];
     const now = Date.now();
 
@@ -17,7 +19,7 @@ export async function getTrashItems(): Promise<TrashItem[]> {
 
     // If any items were pruned, update storage
     if (validItems.length !== rawItems.length) {
-      await chrome.storage.local.set({ [STORAGE_KEY]: validItems });
+      await browser.storage.local.set({ [STORAGE_KEY]: validItems });
     }
 
     // Sort newest deletions first
@@ -45,7 +47,7 @@ export async function addToTrash(item: Omit<TrashItem, 'id' | 'deletedAt'>): Pro
     currentTrash.pop();
   }
 
-  await chrome.storage.local.set({ [STORAGE_KEY]: currentTrash });
+  await browser.storage.local.set({ [STORAGE_KEY]: currentTrash });
   return trashItem;
 }
 
@@ -67,7 +69,7 @@ export async function addMultipleToTrash(
     }));
 
     const updated = [...newEntries, ...currentTrash].slice(0, 250);
-    await chrome.storage.local.set({ [STORAGE_KEY]: updated });
+    await browser.storage.local.set({ [STORAGE_KEY]: updated });
   } catch (err) {
     console.error('Error adding multiple items to trash:', err);
   }
@@ -77,7 +79,7 @@ export async function addMultipleToTrash(
  * Add a Chrome BookmarkTreeNode to the recycle bin recursively
  */
 export async function addNodeToTrash(
-  node: chrome.bookmarks.BookmarkTreeNode,
+  node: BookmarkTreeNode,
   parentPath = 'Bookmarks Bar'
 ): Promise<TrashItem> {
   const isFolder = !node.url;
@@ -115,7 +117,7 @@ export async function restoreFromTrash(trashId: string): Promise<boolean> {
     // Verify if original parent folder still exists in Chrome
     let targetParentId = item.parentId || '1';
     try {
-      const existing = await chrome.bookmarks.get(targetParentId);
+      const existing = await browser.bookmarks.get(targetParentId);
       if (!existing || existing.length === 0) {
         targetParentId = '1'; // Fallback to Bookmarks Bar
       }
@@ -126,13 +128,13 @@ export async function restoreFromTrash(trashId: string): Promise<boolean> {
     // Helper to recursively restore
     async function restoreNode(node: TrashItem, parentId: string) {
       if (node.url) {
-        await chrome.bookmarks.create({
+        await browser.bookmarks.create({
           parentId,
           title: node.title,
           url: node.url,
         });
       } else {
-        const folder = await chrome.bookmarks.create({
+        const folder = await browser.bookmarks.create({
           parentId,
           title: node.title,
         });
@@ -148,7 +150,7 @@ export async function restoreFromTrash(trashId: string): Promise<boolean> {
 
     // Remove from recycle bin storage
     const updated = items.filter((t) => t.id !== trashId);
-    await chrome.storage.local.set({ [STORAGE_KEY]: updated });
+    await browser.storage.local.set({ [STORAGE_KEY]: updated });
     return true;
   } catch (err) {
     console.error(`Failed to restore item ${trashId}:`, err);
@@ -162,14 +164,14 @@ export async function restoreFromTrash(trashId: string): Promise<boolean> {
 export async function permanentlyDelete(trashId: string): Promise<void> {
   const items = await getTrashItems();
   const updated = items.filter((t) => t.id !== trashId);
-  await chrome.storage.local.set({ [STORAGE_KEY]: updated });
+  await browser.storage.local.set({ [STORAGE_KEY]: updated });
 }
 
 /**
  * Empty the entire recycle bin
  */
 export async function emptyTrash(): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEY]: [] });
+  await browser.storage.local.set({ [STORAGE_KEY]: [] });
 }
 
 /**

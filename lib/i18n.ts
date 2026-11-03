@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { browser } from 'wxt/browser';
 
 import en from '@/locales/en.json';
 import tr from '@/locales/tr.json';
@@ -10,20 +11,16 @@ const messages: Record<Language, typeof en> = { en, tr };
 export type TranslationKey = keyof typeof en;
 
 export async function getSavedLanguage(): Promise<Language> {
-  const data = await chrome.storage.local.get('language');
+  const data = await browser.storage.local.get('language');
   if (data.language === 'en' || data.language === 'tr') {
-    return data.language;
+    return data.language as Language;
   }
-  const browserLang = (
-    (typeof chrome !== 'undefined' && chrome.i18n?.getUILanguage?.()) ||
-    navigator.language ||
-    'en'
-  ).toLowerCase();
+  const browserLang = (browser.i18n?.getUILanguage?.() || navigator.language || 'en').toLowerCase();
   return browserLang.startsWith('tr') ? 'tr' : 'en';
 }
 
 export async function setSavedLanguage(lang: Language): Promise<void> {
-  await chrome.storage.local.set({ language: lang });
+  await browser.storage.local.set({ language: lang });
 }
 
 export function useI18n() {

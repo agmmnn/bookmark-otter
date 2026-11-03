@@ -1,3 +1,5 @@
+import { browser } from 'wxt/browser';
+
 import type {
   BrokenLinkResult,
   DuplicateGroup,
@@ -7,6 +9,7 @@ import type {
   TrackingCleanItem,
   TrackingCleanOptions,
   TrackingCleanSegment,
+  BookmarkTreeNode,
 } from '@/types';
 
 import { flattenBookmarks } from './bookmarks';
@@ -74,10 +77,23 @@ export function normalizeUrl(rawUrl: string): string {
 }
 
 /**
+ * Resolves either raw bookmark tree nodes or pre-flattened bookmarks into FlatBookmark[]
+ * to prevent redundant multi-pass tree flattening across algorithms.
+ */
+function resolveFlatBookmarks(input: BookmarkTreeNode[] | FlatBookmark[]): FlatBookmark[] {
+  if (input.length === 0) return [];
+  const first = input[0] as any;
+  if (first && 'domain' in first && 'path' in first) {
+    return input as FlatBookmark[];
+  }
+  return flattenBookmarks(input as BookmarkTreeNode[]);
+}
+
+/**
  * Find all duplicate bookmark groups across the entire bookmark tree
  */
-export function findDuplicates(tree: chrome.bookmarks.BookmarkTreeNode[]): DuplicateGroup[] {
-  const bookmarks = flattenBookmarks(tree);
+export function findDuplicates(treeOrFlats: BookmarkTreeNode[] | FlatBookmark[]): DuplicateGroup[] {
+  const bookmarks = resolveFlatBookmarks(treeOrFlats);
   const groupsMap = new Map<string, FlatBookmark[]>();
 
   for (const b of bookmarks) {
@@ -112,11 +128,11 @@ export function findDuplicates(tree: chrome.bookmarks.BookmarkTreeNode[]): Dupli
 /**
  * Detect empty folders in the bookmark tree (excluding protected roots)
  */
-export function findEmptyFolders(tree: chrome.bookmarks.BookmarkTreeNode[]): EmptyFolder[] {
+export function findEmptyFolders(tree: BookmarkTreeNode[]): EmptyFolder[] {
   const PROTECTED_ROOTS = new Set(['0', '1', '2', '3']);
   const emptyFolders: EmptyFolder[] = [];
 
-  function checkFolder(node: chrome.bookmarks.BookmarkTreeNode, parentPath = ''): boolean {
+  function checkFolder(node: BookmarkTreeNode, parentPath = ''): boolean {
     const isFolder = !node.url;
     if (!isFolder) return false;
 
@@ -318,7 +334,7 @@ export async function resolveDuplicateGroup(
       });
 
       // 2. Remove from Chrome
-      await chrome.bookmarks.remove(item.id);
+      await browser.bookmarks.remove(item.id);
       removedCount++;
     } catch (err) {
       console.error(`Failed to remove duplicate bookmark ${item.id}:`, err);
@@ -346,7 +362,7 @@ export async function removeEmptyFolder(folder: EmptyFolder): Promise<boolean> {
     });
 
     // 2. Remove folder
-    await chrome.bookmarks.remove(folder.id);
+    await browser.bookmarks.remove(folder.id);
     return true;
   } catch (err) {
     console.error(`Failed to remove empty folder ${folder.id}:`, err);
@@ -370,7 +386,7 @@ export async function removeBookmarkWithTrash(bookmark: FlatBookmark): Promise<b
     });
 
     // 2. Remove from Chrome
-    await chrome.bookmarks.remove(bookmark.id);
+    await browser.bookmarks.remove(bookmark.id);
     return true;
   } catch (err) {
     console.error(`Failed to delete bookmark ${bookmark.id}:`, err);
@@ -405,7 +421,7 @@ export async function removeMultipleBookmarksWithTrash(
   let count = 0;
   for (const b of bookmarks) {
     try {
-      await chrome.bookmarks.remove(b.id);
+      await browser.bookmarks.remove(b.id);
       count++;
       onProgress?.(count, bookmarks.length);
     } catch (err) {
@@ -419,8 +435,10 @@ export async function removeMultipleBookmarksWithTrash(
 /**
  * Find similar bookmarks grouped by their common base URL / origin and path endpoint
  */
-export function findSimilarBookmarks(tree: chrome.bookmarks.BookmarkTreeNode[]): SimilarGroup[] {
-  const bookmarks = flattenBookmarks(tree);
+export function findSimilarBookmarks(
+  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[]
+): SimilarGroup[] {
+  const bookmarks = resolveFlatBookmarks(treeOrFlats);
   const baseMap = new Map<string, FlatBookmark[]>();
 
   for (const b of bookmarks) {
@@ -491,10 +509,10 @@ const UNIVERSAL_KEYS = new Set([
  * Scan bookmarks for tracking parameters (universal, site-specific, and affiliate)
  */
 export function findTrackingParameters(
-  tree: chrome.bookmarks.BookmarkTreeNode[],
+  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[],
   options: TrackingCleanOptions = { includeSiteSpecific: true, includeAffiliate: false }
 ): TrackingCleanItem[] {
-  const bookmarks = flattenBookmarks(tree);
+  const bookmarks = resolveFlatBookmarks(treeOrFlats);
   const results: TrackingCleanItem[] = [];
 
   for (const b of bookmarks) {
@@ -638,7 +656,7 @@ export function findTrackingParameters(
  */
 export async function cleanBookmarkUrl(bookmarkId: string, cleanUrl: string): Promise<boolean> {
   try {
-    await chrome.bookmarks.update(bookmarkId, { url: cleanUrl });
+    await browser.bookmarks.update(bookmarkId, { url: cleanUrl });
     return true;
   } catch (err) {
     console.error(`Failed to update bookmark ${bookmarkId} URL:`, err);
@@ -656,7 +674,7 @@ export async function cleanMultipleBookmarkUrls(
   let count = 0;
   for (const item of items) {
     try {
-      await chrome.bookmarks.update(item.id, { url: item.cleanUrl });
+      await browser.bookmarks.update(item.id, { url: item.cleanUrl });
       count++;
       onProgress?.(count, items.length);
     } catch (err) {
@@ -756,9 +774,9 @@ export function isInsecureHttp(url: string): boolean {
  * Find all bookmarks saved over unencrypted HTTP (excluding localhost & private IP addresses)
  */
 export function findInsecureHttpBookmarks(
-  tree: chrome.bookmarks.BookmarkTreeNode[]
+  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[]
 ): FlatBookmark[] {
-  const bookmarks = flattenBookmarks(tree);
+  const bookmarks = resolveFlatBookmarks(treeOrFlats);
   return bookmarks.filter((b) => b.url && isInsecureHttp(b.url));
 }
 
@@ -771,7 +789,7 @@ export async function upgradeBookmarkToHttps(
 ): Promise<boolean> {
   try {
     const httpsUrl = currentUrl.replace(/^http:\/\//i, 'https://');
-    await chrome.bookmarks.update(bookmarkId, { url: httpsUrl });
+    await browser.bookmarks.update(bookmarkId, { url: httpsUrl });
     return true;
   } catch (err) {
     console.error(`Failed to upgrade bookmark ${bookmarkId} to HTTPS:`, err);
@@ -790,7 +808,7 @@ export async function upgradeMultipleBookmarksToHttps(
   for (const item of items) {
     try {
       const httpsUrl = item.url.replace(/^http:\/\//i, 'https://');
-      await chrome.bookmarks.update(item.id, { url: httpsUrl });
+      await browser.bookmarks.update(item.id, { url: httpsUrl });
       count++;
       onProgress?.(count, items.length);
     } catch (err) {

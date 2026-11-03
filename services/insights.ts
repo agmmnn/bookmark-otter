@@ -1,4 +1,4 @@
-import type { InsightsData } from '@/types';
+import type { InsightsData, BookmarkTreeNode } from '@/types';
 
 import { flattenBookmarks, getAllFolders } from './bookmarks';
 import {
@@ -12,16 +12,14 @@ import {
 /**
  * Compute health metrics, domain breakdown, protocol stats, and overall health score
  */
-export function calculateInsights(
-  tree: chrome.bookmarks.BookmarkTreeNode[],
-  knownBrokenCount = 0
-): InsightsData {
+export function calculateInsights(tree: BookmarkTreeNode[], knownBrokenCount = 0): InsightsData {
   const bookmarks = flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'));
   const folders = getAllFolders(tree).filter((f) => f.id !== '0');
-  const duplicates = findDuplicates(tree);
+  // Pass pre-flattened bookmarks directly to avoid redundant tree traversals
+  const duplicates = findDuplicates(bookmarks);
   const emptyFolders = findEmptyFolders(tree);
-  const similar = findSimilarBookmarks(tree);
-  const trackings = findTrackingParameters(tree);
+  const similar = findSimilarBookmarks(bookmarks);
+  const trackings = findTrackingParameters(bookmarks);
 
   const totalBookmarks = bookmarks.length;
   const totalFolders = folders.length;

@@ -31,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="border-border/60 bg-card/80 sticky top-0 z-20 flex items-center justify-between border-b px-3 py-2 backdrop-blur-md transition-colors duration-150">
+    <header className="border-border/60 bg-card/95 sticky top-0 z-20 flex items-center justify-between border-b px-3 py-2 backdrop-blur-xs transition-colors duration-150">
       {/* Brand Identity */}
       <div className="flex items-center gap-2">
         <img

@@ -17,7 +17,7 @@ import {
   ChevronsUpDown,
   ChevronsDownUp,
 } from 'lucide-react';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useDeferredValue } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,7 +25,7 @@ import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
 import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import { removeBookmarkWithTrash } from '@/services/cleaner';
-import type { FlatBookmark } from '@/types';
+import type { FlatBookmark, BookmarkTreeNode } from '@/types';
 
 type ViewMode = 'tree' | 'table';
 type SortField = 'date' | 'title' | 'domain';
@@ -35,20 +35,22 @@ interface ExplorerProps {
   initialSearchQuery?: string;
 }
 
-export const Explorer: React.FC<ExplorerProps> = ({
+export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
   onBookmarkChanged,
   initialSearchQuery = '',
-}) => {
+}) {
   const { t, lang } = useI18n();
   const [viewMode, setViewMode] = useState<ViewMode>('tree');
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
+  // Non-blocking search with useDeferredValue for 60fps typing without dropped keystrokes
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   useEffect(() => {
     if (initialSearchQuery) {
       setSearchQuery(initialSearchQuery);
     }
   }, [initialSearchQuery]);
-  const [treeData, setTreeData] = useState<chrome.bookmarks.BookmarkTreeNode[]>([]);
+  const [treeData, setTreeData] = useState<BookmarkTreeNode[]>([]);
   const [flatBookmarks, setFlatBookmarks] = useState<FlatBookmark[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -94,7 +96,7 @@ export const Explorer: React.FC<ExplorerProps> = ({
 
   const expandAll = () => {
     const allFolderIds = new Set<string>();
-    function traverse(nodes: chrome.bookmarks.BookmarkTreeNode[]) {
+    function traverse(nodes: BookmarkTreeNode[]) {
       for (const n of nodes) {
         if (!n.url) {
           allFolderIds.add(n.id);
@@ -127,10 +129,41 @@ export const Explorer: React.FC<ExplorerProps> = ({
     if (onBookmarkChanged) onBookmarkChanged();
   };
 
-  // Filtered bookmarks for Table View & Search
+  // Pre-index matching node IDs so renderTreeNode performs O(1) set lookups instead of exponential recursion
+  const matchingTreeIds = useMemo(() => {
+    const q = deferredSearchQuery.toLowerCase().trim();
+    if (!q) return null;
+    const matchSet = new Set<string>();
+
+    function scan(nodes: BookmarkTreeNode[]): boolean {
+      let anyDescendantMatched = false;
+      for (const node of nodes) {
+        const isFolder = !node.url;
+        const selfMatch =
+          node.title.toLowerCase().includes(q) ||
+          Boolean(node.url && node.url.toLowerCase().includes(q));
+
+        let childMatch = false;
+        if (isFolder && node.children && node.children.length > 0) {
+          childMatch = scan(node.children);
+        }
+
+        if (selfMatch || childMatch) {
+          matchSet.add(node.id);
+          anyDescendantMatched = true;
+        }
+      }
+      return anyDescendantMatched;
+    }
+
+    scan(treeData);
+    return matchSet;
+  }, [treeData, deferredSearchQuery]);
+
+  // Filtered bookmarks for Table View & Search (using deferredSearchQuery for instant typing)
   const filteredBookmarks = useMemo(() => {
     let result = flatBookmarks;
-    const q = searchQuery.toLowerCase().trim();
+    const q = deferredSearchQuery.toLowerCase().trim();
     if (q) {
       result = result.filter(
         (b) =>
@@ -155,7 +188,28 @@ export const Explorer: React.FC<ExplorerProps> = ({
       const timeB = b.dateAdded || 0;
       return sortAsc ? timeA - timeB : timeB - timeA;
     });
-  }, [flatBookmarks, searchQuery, sortField, sortAsc]);
+  }, [flatBookmarks, deferredSearchQuery, sortField, sortAsc]);
+
+  // Progressive windowing / chunking for 1,000+ bookmarks in Table View
+  const INITIAL_BATCH = 40;
+  const [renderedCount, setRenderedCount] = useState(INITIAL_BATCH);
+
+  useEffect(() => {
+    setRenderedCount(INITIAL_BATCH);
+  }, [deferredSearchQuery, sortField, sortAsc]);
+
+  const visibleBookmarks = useMemo(() => {
+    return filteredBookmarks.slice(0, renderedCount);
+  }, [filteredBookmarks, renderedCount]);
+
+  const handleTableScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollTop + clientHeight >= scrollHeight - 200) {
+      if (renderedCount < filteredBookmarks.length) {
+        setRenderedCount((prev) => Math.min(filteredBookmarks.length, prev + 40));
+      }
+    }
+  };
 
   const handleToggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -181,12 +235,8 @@ export const Explorer: React.FC<ExplorerProps> = ({
     });
   };
 
-  // Recursive Tree Node Renderer
-  const renderTreeNode = (
-    node: chrome.bookmarks.BookmarkTreeNode,
-    depth = 0,
-    currentPath = ''
-  ): React.ReactNode => {
+  // Recursive Tree Node Renderer with O(1) matching check
+  const renderTreeNode = (node: BookmarkTreeNode, depth = 0, currentPath = ''): React.ReactNode => {
     const isFolder = !node.url;
     const thisPath = currentPath
       ? isFolder
@@ -194,29 +244,9 @@ export const Explorer: React.FC<ExplorerProps> = ({
         : currentPath
       : node.title;
 
-    // Filter check if search query is active
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      const nodeMatches =
-        node.title.toLowerCase().includes(q) || (node.url && node.url.toLowerCase().includes(q));
-
-      // For folders, check if any descendant matches
-      if (isFolder) {
-        const hasMatchingChild = (children?: chrome.bookmarks.BookmarkTreeNode[]): boolean => {
-          if (!children) return false;
-          return children.some((c) => {
-            if (c.title.toLowerCase().includes(q) || (c.url && c.url.toLowerCase().includes(q)))
-              return true;
-            return hasMatchingChild(c.children);
-          });
-        };
-
-        if (!nodeMatches && !hasMatchingChild(node.children)) {
-          return null; // Skip folder if nothing inside matches search
-        }
-      } else if (!nodeMatches) {
-        return null;
-      }
+    // Fast O(1) matching check
+    if (matchingTreeIds !== null && !matchingTreeIds.has(node.id)) {
+      return null;
     }
 
     if (isFolder) {
@@ -224,12 +254,14 @@ export const Explorer: React.FC<ExplorerProps> = ({
       if (node.id === '0') {
         return (
           <div key={node.id} className="space-y-0.5">
-            {node.children?.map((child) => renderTreeNode(child, depth, thisPath))}
+            {node.children?.map((child: BookmarkTreeNode) =>
+              renderTreeNode(child, depth, thisPath)
+            )}
           </div>
         );
       }
 
-      const isExpanded = expandedFolders.has(node.id) || searchQuery.trim().length > 0;
+      const isExpanded = expandedFolders.has(node.id) || deferredSearchQuery.trim().length > 0;
       const childCount = node.children?.length || 0;
 
       return (
@@ -264,7 +296,9 @@ export const Explorer: React.FC<ExplorerProps> = ({
           {/* Subchildren */}
           {isExpanded && node.children && node.children.length > 0 && (
             <div className="border-border/40 my-0.5 ml-3.5 space-y-0.5 border-l pl-1">
-              {node.children.map((child) => renderTreeNode(child, depth + 1, thisPath))}
+              {node.children.map((child: BookmarkTreeNode) =>
+                renderTreeNode(child, depth + 1, thisPath)
+              )}
             </div>
           )}
         </div>
@@ -551,9 +585,12 @@ export const Explorer: React.FC<ExplorerProps> = ({
             </div>
           </div>
 
-          {/* Table Rows */}
-          <div className="divide-border/30 max-h-[calc(100vh-250px)] divide-y overflow-y-auto">
-            {filteredBookmarks.map((bookmark) => (
+          {/* Table Rows (Windowed slice with progressive infinite scroll) */}
+          <div
+            onScroll={handleTableScroll}
+            className="divide-border/30 max-h-[calc(100vh-250px)] divide-y overflow-y-auto"
+          >
+            {visibleBookmarks.map((bookmark) => (
               <div
                 key={bookmark.id}
                 className="group hover:bg-muted/20 grid grid-cols-12 items-center gap-2 px-3 py-2 text-xs transition-colors duration-100"
@@ -565,6 +602,8 @@ export const Explorer: React.FC<ExplorerProps> = ({
                       bookmark.url
                     )}&sz=32`}
                     alt=""
+                    loading="lazy"
+                    decoding="async"
                     className="size-3.5 shrink-0 rounded-xs"
                     onError={(e) => {
                       (e.target as HTMLElement).style.display = 'none';
@@ -641,9 +680,15 @@ export const Explorer: React.FC<ExplorerProps> = ({
                 </div>
               </div>
             ))}
+
+            {visibleBookmarks.length < filteredBookmarks.length && (
+              <div className="bg-muted/10 text-muted-foreground/70 py-2 text-center text-[10.5px]">
+                Showing {visibleBookmarks.length} of {filteredBookmarks.length} bookmarks...
+              </div>
+            )}
           </div>
         </div>
       )}
     </div>
   );
-};
+});

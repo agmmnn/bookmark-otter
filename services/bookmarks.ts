@@ -1,3 +1,5 @@
+import { browser } from 'wxt/browser';
+
 import type {
   FlatBookmark,
   FlatFolder,
@@ -5,88 +7,96 @@ import type {
   ReorgPlan,
   TreeSnapshot,
   UndoOperation,
+  BookmarkTreeNode,
 } from '@/types';
 
 import { saveSnapshot } from './storage';
 import { addToTrash } from './trash';
 
 /**
- * Fetch the complete bookmark tree from Chrome API
+ * Fetch the complete bookmark tree from Browser API (cross-browser WebExtensions)
  */
-export async function getBookmarkTree(): Promise<chrome.bookmarks.BookmarkTreeNode[]> {
-  return await chrome.bookmarks.getTree();
+export async function getBookmarkTree(): Promise<BookmarkTreeNode[]> {
+  if (!browser.bookmarks?.getTree) {
+    console.warn('browser.bookmarks API is not supported in this browser (e.g. Safari).');
+    return [];
+  }
+  return await browser.bookmarks.getTree();
+}
+
+function extractHostname(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
 }
 
 /**
- * Flatten all bookmarks into a searchable list with folder paths
+ * Flatten all bookmarks into a searchable list with folder paths.
+ * Single O(N) pass using a mutable accumulator to avoid O(N^2) array concatenations.
  */
-export function flattenBookmarks(
-  nodes: chrome.bookmarks.BookmarkTreeNode[],
-  currentPath = ''
-): FlatBookmark[] {
-  let result: FlatBookmark[] = [];
+export function flattenBookmarks(nodes: BookmarkTreeNode[], currentPath = ''): FlatBookmark[] {
+  const result: FlatBookmark[] = [];
 
-  for (const node of nodes) {
-    const isFolder = !node.url;
-    const path = currentPath
-      ? isFolder
-        ? `${currentPath} / ${node.title}`
-        : currentPath
-      : node.title;
+  function traverse(items: BookmarkTreeNode[], parentPath: string) {
+    for (const node of items) {
+      const isFolder = !node.url;
+      const path = parentPath
+        ? isFolder
+          ? `${parentPath} / ${node.title}`
+          : parentPath
+        : node.title;
 
-    if (node.url) {
-      let domain = '';
-      try {
-        domain = new URL(node.url).hostname.replace(/^www\./, '');
-      } catch {
-        domain = '';
+      if (node.url) {
+        result.push({
+          id: node.id,
+          parentId: node.parentId || '',
+          title: node.title,
+          url: node.url,
+          path: parentPath || 'Root',
+          domain: extractHostname(node.url),
+          dateAdded: node.dateAdded,
+        });
       }
 
-      result.push({
-        id: node.id,
-        parentId: node.parentId || '',
-        title: node.title,
-        url: node.url,
-        path: currentPath || 'Root',
-        domain,
-        dateAdded: node.dateAdded,
-      });
-    }
-
-    if (node.children && node.children.length > 0) {
-      result = result.concat(flattenBookmarks(node.children, path));
+      if (node.children && node.children.length > 0) {
+        traverse(node.children, path);
+      }
     }
   }
 
+  traverse(nodes, currentPath);
   return result;
 }
 
 /**
- * Get all folders with their full hierarchical paths
+ * Get all folders with their full hierarchical paths.
+ * Single O(N) pass using a mutable accumulator.
  */
-export function getAllFolders(
-  nodes: chrome.bookmarks.BookmarkTreeNode[],
-  currentPath = ''
-): FlatFolder[] {
-  let result: FlatFolder[] = [];
+export function getAllFolders(nodes: BookmarkTreeNode[], currentPath = ''): FlatFolder[] {
+  const result: FlatFolder[] = [];
 
-  for (const node of nodes) {
-    if (!node.url) {
-      // It's a folder
-      const path = currentPath ? `${currentPath} / ${node.title}` : node.title;
-      result.push({
-        id: node.id,
-        parentId: node.parentId,
-        title: node.title,
-        path,
-      });
+  function traverse(items: BookmarkTreeNode[], parentPath: string) {
+    for (const node of items) {
+      if (!node.url) {
+        // It's a folder
+        const path = parentPath ? `${parentPath} / ${node.title}` : node.title;
+        result.push({
+          id: node.id,
+          parentId: node.parentId,
+          title: node.title,
+          path,
+        });
 
-      if (node.children) {
-        result = result.concat(getAllFolders(node.children, path));
+        if (node.children && node.children.length > 0) {
+          traverse(node.children, path);
+        }
       }
     }
   }
 
+  traverse(nodes, currentPath);
   return result;
 }
 
@@ -94,8 +104,11 @@ export function getAllFolders(
  * Fetch recently added bookmarks with resolved folder paths
  */
 export async function getRecentBookmarks(limit = 20): Promise<FlatBookmark[]> {
+  if (!browser.bookmarks?.getRecent) {
+    return [];
+  }
   const [recentNodes, tree] = await Promise.all([
-    chrome.bookmarks.getRecent(limit),
+    browser.bookmarks.getRecent(limit),
     getBookmarkTree(),
   ]);
   const folders = getAllFolders(tree);
@@ -129,7 +142,7 @@ export async function getRecentBookmarks(limit = 20): Promise<FlatBookmark[]> {
  * Convert bookmarks and folders into a token-optimized Compact DSL string
  * for LLMs. Reduces token usage by ~85% compared to raw JSON.
  */
-export function getCompactTreeDSL(nodes: chrome.bookmarks.BookmarkTreeNode[]): string {
+export function getCompactTreeDSL(nodes: BookmarkTreeNode[]): string {
   const folders = getAllFolders(nodes);
   const bookmarks = flattenBookmarks(nodes);
 
@@ -173,7 +186,7 @@ export async function executePlan(
     if (act.action === 'CREATE_FOLDER') {
       const parentId = tmpIdMap.get(act.parentId) || act.parentId || '1'; // Default to Bookmarks Bar ('1')
       try {
-        const created = await chrome.bookmarks.create({
+        const created = await browser.bookmarks.create({
           parentId,
           title: act.title,
         });
@@ -195,7 +208,7 @@ export async function executePlan(
       if (PROTECTED_IDS.has(act.bookmarkId)) continue;
       const targetParentId = tmpIdMap.get(act.targetFolderId) || act.targetFolderId;
       try {
-        const [orig] = await chrome.bookmarks.get(act.bookmarkId);
+        const [orig] = await browser.bookmarks.get(act.bookmarkId);
         if (orig && orig.parentId) {
           inverseOps.push({
             type: 'MOVE',
@@ -204,7 +217,7 @@ export async function executePlan(
             originalIndex: orig.index,
           });
         }
-        await chrome.bookmarks.move(act.bookmarkId, { parentId: targetParentId });
+        await browser.bookmarks.move(act.bookmarkId, { parentId: targetParentId });
         appliedCount++;
       } catch (err) {
         console.error(`Failed to move bookmark ${act.bookmarkId}:`, err);
@@ -217,7 +230,7 @@ export async function executePlan(
     if (act.action === 'RENAME') {
       if (PROTECTED_IDS.has(act.id)) continue;
       try {
-        const [orig] = await chrome.bookmarks.get(act.id);
+        const [orig] = await browser.bookmarks.get(act.id);
         if (orig) {
           inverseOps.push({
             type: 'RENAME',
@@ -225,7 +238,7 @@ export async function executePlan(
             originalTitle: orig.title,
           });
         }
-        await chrome.bookmarks.update(act.id, { title: act.newTitle });
+        await browser.bookmarks.update(act.id, { title: act.newTitle });
         appliedCount++;
       } catch (err) {
         console.error(`Failed to rename bookmark ${act.id}:`, err);
@@ -238,7 +251,7 @@ export async function executePlan(
     if (act.action === 'REMOVE') {
       if (PROTECTED_IDS.has(act.id)) continue;
       try {
-        const [orig] = await chrome.bookmarks.get(act.id);
+        const [orig] = await browser.bookmarks.get(act.id);
         if (orig && orig.parentId) {
           inverseOps.push({
             type: 'REMOVE',
@@ -258,9 +271,9 @@ export async function executePlan(
           parentPath: 'AI Plan',
         });
         if (act.isFolder) {
-          await chrome.bookmarks.removeTree(act.id);
+          await browser.bookmarks.removeTree(act.id);
         } else {
-          await chrome.bookmarks.remove(act.id);
+          await browser.bookmarks.remove(act.id);
         }
         appliedCount++;
       } catch (err) {
@@ -288,19 +301,19 @@ export async function restoreSnapshot(snapshot: TreeSnapshot): Promise<boolean> 
       for (const op of ops) {
         try {
           if (op.type === 'MOVE') {
-            await chrome.bookmarks.move(op.bookmarkId, {
+            await browser.bookmarks.move(op.bookmarkId, {
               parentId: op.originalParentId,
               index: op.originalIndex,
             });
           } else if (op.type === 'RENAME') {
-            await chrome.bookmarks.update(op.id, {
+            await browser.bookmarks.update(op.id, {
               title: op.originalTitle,
             });
           } else if (op.type === 'CREATE_FOLDER') {
-            await chrome.bookmarks.remove(op.createdFolderId);
+            await browser.bookmarks.remove(op.createdFolderId);
           } else if (op.type === 'REMOVE') {
             if (op.restoredNode.url) {
-              await chrome.bookmarks.create({
+              await browser.bookmarks.create({
                 parentId: op.restoredNode.parentId,
                 title: op.restoredNode.title,
                 url: op.restoredNode.url,

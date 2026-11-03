@@ -38,11 +38,11 @@ interface InsightsProps {
   onNavigateToExplorer?: (query: string) => void;
 }
 
-export const Insights: React.FC<InsightsProps> = ({
+export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
   onNavigateToDoctor,
   onNavigateToCopilot: _onNavigateToCopilot,
   onNavigateToExplorer,
-}) => {
+}) {
   const { t, lang } = useI18n();
   const [data, setData] = useState<InsightsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -629,22 +629,22 @@ export const Insights: React.FC<InsightsProps> = ({
             {/* Segmented Progress Bar */}
             <div className="bg-muted/40 flex h-2 w-full overflow-hidden rounded-full">
               <div
-                className="bg-emerald-500 transition-all duration-300"
+                className="bg-emerald-500 transition-[width] duration-300"
                 style={{ width: `${data.ageDistribution.under6Months.percentage}%` }}
                 title={`< 6m: ${data.ageDistribution.under6Months.count}`}
               />
               <div
-                className="bg-sky-500 transition-all duration-300"
+                className="bg-sky-500 transition-[width] duration-300"
                 style={{ width: `${data.ageDistribution.sixTo12Months.percentage}%` }}
                 title={`6-12m: ${data.ageDistribution.sixTo12Months.count}`}
               />
               <div
-                className="bg-amber-500 transition-all duration-300"
+                className="bg-amber-500 transition-[width] duration-300"
                 style={{ width: `${data.ageDistribution.oneTo3Years.percentage}%` }}
                 title={`1-3y: ${data.ageDistribution.oneTo3Years.count}`}
               />
               <div
-                className="bg-purple-500 transition-all duration-300"
+                className="bg-purple-500 transition-[width] duration-300"
                 style={{ width: `${data.ageDistribution.over3Years.percentage}%` }}
                 title={`3y+: ${data.ageDistribution.over3Years.count}`}
               />
@@ -743,7 +743,7 @@ export const Insights: React.FC<InsightsProps> = ({
 
                     <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
                       <div
-                        className="h-full rounded-full bg-amber-500/70 transition-all duration-300 ease-out"
+                        className="h-full rounded-full bg-amber-500/70 transition-[width] duration-300 ease-out"
                         style={{ width: `${Math.min(100, Math.max(4, folder.percentage))}%` }}
                       />
                     </div>
@@ -800,7 +800,7 @@ export const Insights: React.FC<InsightsProps> = ({
 
                     <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
                       <div
-                        className="bg-primary/70 h-full rounded-full transition-all duration-300 ease-out"
+                        className="bg-primary/70 h-full rounded-full transition-[width] duration-300 ease-out"
                         style={{ width: `${Math.min(100, Math.max(4, item.percentage))}%` }}
                       />
                     </div>
@@ -867,4 +867,4 @@ export const Insights: React.FC<InsightsProps> = ({
       )}
     </div>
   );
-};
+});

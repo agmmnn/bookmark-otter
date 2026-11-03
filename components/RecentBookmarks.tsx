@@ -10,6 +10,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
+import { browser } from 'wxt/browser';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,10 +25,10 @@ interface RecentBookmarksProps {
   onOpenSettings?: () => void;
 }
 
-export const RecentBookmarks: React.FC<RecentBookmarksProps> = ({
+export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(function RecentBookmarks({
   onBookmarkChanged,
   onOpenSettings,
-}) => {
+}) {
   const { t } = useI18n();
   const [bookmarks, setBookmarks] = useState<FlatBookmark[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -61,16 +62,16 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = ({
     const onChanged = () => loadRecent();
     const onMoved = () => loadRecent();
 
-    chrome.bookmarks.onCreated.addListener(onCreated);
-    chrome.bookmarks.onRemoved.addListener(onRemoved);
-    chrome.bookmarks.onChanged.addListener(onChanged);
-    chrome.bookmarks.onMoved.addListener(onMoved);
+    browser.bookmarks.onCreated.addListener(onCreated);
+    browser.bookmarks.onRemoved.addListener(onRemoved);
+    browser.bookmarks.onChanged.addListener(onChanged);
+    browser.bookmarks.onMoved.addListener(onMoved);
 
     return () => {
-      chrome.bookmarks.onCreated.removeListener(onCreated);
-      chrome.bookmarks.onRemoved.removeListener(onRemoved);
-      chrome.bookmarks.onChanged.removeListener(onChanged);
-      chrome.bookmarks.onMoved.removeListener(onMoved);
+      browser.bookmarks.onCreated.removeListener(onCreated);
+      browser.bookmarks.onRemoved.removeListener(onRemoved);
+      browser.bookmarks.onChanged.removeListener(onChanged);
+      browser.bookmarks.onMoved.removeListener(onMoved);
     };
   }, []);
 
@@ -118,19 +119,19 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = ({
 
       if (activeSuggestion.isNewFolder) {
         const folderName = activeSuggestion.newFolderName || activeSuggestion.suggestedFolderPath;
-        const newFolder = await chrome.bookmarks.create({
+        const newFolder = await browser.bookmarks.create({
           parentId: '1', // default under Bookmarks Bar
           title: folderName,
         });
         targetFolderId = newFolder.id;
       }
 
-      await chrome.bookmarks.update(activeSuggestion.bookmarkId, {
+      await browser.bookmarks.update(activeSuggestion.bookmarkId, {
         title: editedTitle.trim() || activeSuggestion.suggestedTitle,
       });
 
       if (targetFolderId && targetFolderId !== 'NEW') {
-        await chrome.bookmarks.move(activeSuggestion.bookmarkId, {
+        await browser.bookmarks.move(activeSuggestion.bookmarkId, {
           parentId: targetFolderId,
         });
       }
@@ -380,4 +381,4 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = ({
       </div>
     </div>
   );
-};
+});

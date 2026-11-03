@@ -1,3 +1,5 @@
+import { browser } from 'wxt/browser';
+
 import { suggestForNewBookmark } from '@/services/ai';
 import { getBookmarkTree, getAllFolders } from '@/services/bookmarks';
 import {
@@ -21,15 +23,26 @@ export default defineBackground(() => {
     .then((queue) => updateBadgeCount(queue.length))
     .catch((err) => console.warn('Could not sync badge count on startup:', err));
 
-  // Configure Side Panel to open on action icon click
-  if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
-    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
-      console.warn('Could not set side panel behavior:', err);
+  // Configure Side Panel (Chromium) / Sidebar (Firefox) / Tab fallback (Safari) on action click
+  const actionApi = (browser as any).action || (browser as any).browserAction;
+  if (browser.sidePanel && (browser.sidePanel as any).setPanelBehavior) {
+    (browser.sidePanel as any)
+      .setPanelBehavior({ openPanelOnActionClick: true })
+      .catch((err: any) => {
+        console.warn('Could not set side panel behavior:', err);
+      });
+  } else if ((browser as any).sidebarAction) {
+    actionApi?.onClicked?.addListener?.(() => {
+      (browser as any).sidebarAction?.open?.();
+    });
+  } else if (actionApi?.onClicked) {
+    actionApi.onClicked.addListener(() => {
+      browser.tabs.create({ url: browser.runtime.getURL('/sidepanel.html') });
     });
   }
 
   // 1. Listen for new bookmarks being created (Address bar star or Cmd+D)
-  chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
+  browser.bookmarks?.onCreated?.addListener?.(async (id, bookmark) => {
     // Only handle web bookmarks, ignore folders
     if (!bookmark.url || bookmark.url.startsWith('chrome://')) return;
 
@@ -47,11 +60,11 @@ export default defineBackground(() => {
 
       // Extract page metadata if the bookmarked page is in the active tab
       let pageMeta: { description?: string; h1?: string } | undefined;
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
 
       if (activeTab && activeTab.id && activeTab.url === bookmark.url) {
         try {
-          const injection = await chrome.scripting.executeScript({
+          const injection = await browser.scripting.executeScript({
             target: { tabId: activeTab.id },
             func: () => {
               const desc =
@@ -94,11 +107,11 @@ export default defineBackground(() => {
       }
       inFlightBookmarkIds.delete(id);
 
-      // 2. Double-check with Chrome bookmarks API that the bookmark still exists
+      // 2. Double-check with Browser bookmarks API that the bookmark still exists
       try {
-        const [existing] = await chrome.bookmarks.get(id);
+        const [existing] = await browser.bookmarks.get(id);
         if (!existing) {
-          console.log(`[AI Suggestion] Bookmark ${id} no longer exists in Chrome. Discarding.`);
+          console.log(`[AI Suggestion] Bookmark ${id} no longer exists. Discarding.`);
           return;
         }
       } catch {
@@ -111,7 +124,7 @@ export default defineBackground(() => {
       await updateBadgeCount(queue.length);
 
       // Broadcast to any open sidepanel UI
-      chrome.runtime
+      browser.runtime
         .sendMessage({
           type: 'SUGGESTIONS_UPDATED',
           suggestions: queue,
@@ -127,7 +140,7 @@ export default defineBackground(() => {
   });
 
   // 2. Listen for removed bookmarks/folders and preserve in 30-day Recycle Bin
-  chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
+  browser.bookmarks?.onRemoved?.addListener?.(async (id, removeInfo) => {
     // Immediately cancel in-flight analysis if this bookmark was being processed
     inFlightBookmarkIds.delete(id);
 
@@ -136,7 +149,7 @@ export default defineBackground(() => {
       const removedUrl = (removeInfo as any)?.node?.url;
       const queue = await removePendingSuggestion(id, removedUrl);
       await updateBadgeCount(queue.length);
-      chrome.runtime
+      browser.runtime
         .sendMessage({
           type: 'SUGGESTIONS_UPDATED',
           suggestions: queue,

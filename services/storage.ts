@@ -1,4 +1,12 @@
-import type { AppSettings, PendingSuggestion, TreeSnapshot, UndoOperation } from '@/types';
+import { browser } from 'wxt/browser';
+
+import type {
+  AppSettings,
+  PendingSuggestion,
+  TreeSnapshot,
+  UndoOperation,
+  BookmarkTreeNode,
+} from '@/types';
 
 const DEFAULT_SETTINGS: AppSettings = {
   aiProvider: 'google',
@@ -13,13 +21,13 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export async function getSettings(): Promise<AppSettings> {
-  const data = await chrome.storage.local.get('settings');
+  const data = await browser.storage.local.get('settings');
   return { ...DEFAULT_SETTINGS, ...(data.settings as AppSettings) };
 }
 
 export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
   const current = await getSettings();
-  await chrome.storage.local.set({ settings: { ...current, ...settings } });
+  await browser.storage.local.set({ settings: { ...current, ...settings } });
 }
 
 export function hasConfiguredKey(settings: AppSettings): boolean {
@@ -42,15 +50,15 @@ export function hasConfiguredKey(settings: AppSettings): boolean {
 }
 
 export async function getPendingSuggestions(): Promise<PendingSuggestion[]> {
-  const data = await chrome.storage.local.get(['pendingSuggestions', 'pendingSuggestion']);
+  const data = await browser.storage.local.get(['pendingSuggestions', 'pendingSuggestion']);
   if (Array.isArray(data.pendingSuggestions)) {
-    return data.pendingSuggestions;
+    return data.pendingSuggestions as PendingSuggestion[];
   }
   // Migration fallback from single item
   if (data.pendingSuggestion) {
     const single = data.pendingSuggestion as PendingSuggestion;
-    await chrome.storage.local.set({ pendingSuggestions: [single] });
-    await chrome.storage.local.remove('pendingSuggestion');
+    await browser.storage.local.set({ pendingSuggestions: [single] });
+    await browser.storage.local.remove('pendingSuggestion');
     return [single];
   }
   return [];
@@ -58,19 +66,19 @@ export async function getPendingSuggestions(): Promise<PendingSuggestion[]> {
 
 export async function setPendingSuggestions(suggestions: PendingSuggestion[]): Promise<void> {
   if (suggestions && suggestions.length > 0) {
-    await chrome.storage.local.set({ pendingSuggestions: suggestions });
+    await browser.storage.local.set({ pendingSuggestions: suggestions });
   } else {
-    await chrome.storage.local.remove(['pendingSuggestions', 'pendingSuggestion']);
+    await browser.storage.local.remove(['pendingSuggestions', 'pendingSuggestion']);
   }
 }
 
 export async function addPendingSuggestion(
   suggestion: PendingSuggestion
 ): Promise<PendingSuggestion[]> {
-  // Verify bookmark still exists in Chrome before saving
-  if (typeof chrome !== 'undefined' && chrome.bookmarks?.get) {
+  // Verify bookmark still exists in browser before saving
+  if (browser.bookmarks?.get) {
     try {
-      const [node] = await chrome.bookmarks.get(suggestion.bookmarkId);
+      const [node] = await browser.bookmarks.get(suggestion.bookmarkId);
       if (!node) return await getPendingSuggestions();
     } catch {
       // Bookmark was already deleted/unstarred!
@@ -106,19 +114,19 @@ export async function validateAndCleanPendingSuggestions(): Promise<PendingSugge
     return [];
   }
 
-  if (typeof chrome === 'undefined' || !chrome.bookmarks?.get) {
+  if (!browser.bookmarks?.get) {
     return current;
   }
 
   const valid: PendingSuggestion[] = [];
   for (const item of current) {
     try {
-      const [node] = await chrome.bookmarks.get(item.bookmarkId);
+      const [node] = await browser.bookmarks.get(item.bookmarkId);
       if (node) {
         valid.push(item);
       }
     } catch {
-      // Bookmark was deleted or unstarred in Chrome
+      // Bookmark was deleted or unstarred in browser
     }
   }
 
@@ -130,17 +138,18 @@ export async function validateAndCleanPendingSuggestions(): Promise<PendingSugge
 }
 
 export async function clearPendingSuggestions(): Promise<void> {
-  await chrome.storage.local.remove(['pendingSuggestions', 'pendingSuggestion']);
+  await browser.storage.local.remove(['pendingSuggestions', 'pendingSuggestion']);
 }
 
 export async function updateBadgeCount(count: number): Promise<void> {
   try {
-    if (typeof chrome !== 'undefined' && chrome.action) {
+    const action = browser.action ?? (browser as any).browserAction;
+    if (action) {
       if (count > 0) {
-        await chrome.action.setBadgeText({ text: String(count) });
-        await chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' });
+        await action.setBadgeText({ text: String(count) });
+        await action.setBadgeBackgroundColor({ color: '#f59e0b' });
       } else {
-        await chrome.action.setBadgeText({ text: '' });
+        await action.setBadgeText({ text: '' });
       }
     }
   } catch (err) {
@@ -163,7 +172,7 @@ export async function setPendingSuggestion(suggestion: PendingSuggestion | null)
 
 export async function saveSnapshot(
   description: string,
-  tree?: chrome.bookmarks.BookmarkTreeNode[],
+  tree?: BookmarkTreeNode[],
   inverseOperations?: UndoOperation[]
 ): Promise<string> {
   const snapshot: TreeSnapshot = {
@@ -173,17 +182,17 @@ export async function saveSnapshot(
     tree,
     inverseOperations,
   };
-  const data = await chrome.storage.local.get('snapshots');
+  const data = await browser.storage.local.get('snapshots');
   const snapshots: TreeSnapshot[] = (data.snapshots as TreeSnapshot[]) || [];
   // Keep last 10 snapshots
   snapshots.unshift(snapshot);
   if (snapshots.length > 10) snapshots.pop();
-  await chrome.storage.local.set({ snapshots });
+  await browser.storage.local.set({ snapshots });
   return snapshot.id;
 }
 
 export async function getSnapshots(): Promise<TreeSnapshot[]> {
-  const data = await chrome.storage.local.get('snapshots');
+  const data = await browser.storage.local.get('snapshots');
   return (data.snapshots as TreeSnapshot[]) || [];
 }
 
@@ -193,10 +202,10 @@ export async function getLatestSnapshot(): Promise<TreeSnapshot | null> {
 }
 
 export async function popLatestSnapshot(): Promise<TreeSnapshot | null> {
-  const data = await chrome.storage.local.get('snapshots');
+  const data = await browser.storage.local.get('snapshots');
   const snapshots: TreeSnapshot[] = (data.snapshots as TreeSnapshot[]) || [];
   if (snapshots.length === 0) return null;
   const latest = snapshots.shift()!;
-  await chrome.storage.local.set({ snapshots });
+  await browser.storage.local.set({ snapshots });
   return latest;
 }

@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
+import { browser, type Browser } from 'wxt/browser';
 
 export type Theme = 'light' | 'dark' | 'system';
 
 export async function getSavedTheme(): Promise<Theme> {
   try {
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      const data = await chrome.storage.local.get('theme');
+    if (browser.storage?.local) {
+      const data = await browser.storage.local.get('theme');
       if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') {
-        return data.theme;
+        return data.theme as Theme;
       }
     }
   } catch {}
@@ -47,8 +48,8 @@ export function applyTheme(theme: Theme): boolean {
 
 export async function setSavedTheme(theme: Theme): Promise<void> {
   try {
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      await chrome.storage.local.set({ theme });
+    if (browser.storage?.local) {
+      await browser.storage.local.set({ theme });
     }
   } catch {}
 
@@ -88,7 +89,7 @@ export function useTheme() {
 
     mql.addEventListener('change', handleMediaChange);
 
-    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }) => {
+    const handleStorageChange = (changes: { [key: string]: Browser.storage.StorageChange }) => {
       if (changes.theme) {
         const nextTheme = changes.theme.newValue as Theme;
         setThemeState(nextTheme);
@@ -97,14 +98,14 @@ export function useTheme() {
       }
     };
 
-    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-      chrome.storage.onChanged.addListener(handleStorageChange);
+    if (browser.storage?.onChanged) {
+      browser.storage.onChanged.addListener(handleStorageChange);
     }
 
     return () => {
       mql.removeEventListener('change', handleMediaChange);
-      if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-        chrome.storage.onChanged.removeListener(handleStorageChange);
+      if (browser.storage?.onChanged) {
+        browser.storage.onChanged.removeListener(handleStorageChange);
       }
     };
   }, []);

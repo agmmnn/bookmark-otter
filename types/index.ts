@@ -103,11 +103,15 @@ export type UndoOperation =
       };
     };
 
+import type { Browser } from 'wxt/browser';
+
+export type BookmarkTreeNode = Browser.bookmarks.BookmarkTreeNode;
+
 export interface TreeSnapshot {
   id: string;
   timestamp: number;
   description: string;
-  tree?: chrome.bookmarks.BookmarkTreeNode[];
+  tree?: BookmarkTreeNode[];
   inverseOperations?: UndoOperation[];
 }
 

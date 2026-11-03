@@ -17,7 +17,9 @@ interface RecycleBinProps {
   onRestored?: () => void;
 }
 
-export const RecycleBin: React.FC<RecycleBinProps> = ({ onRestored }) => {
+export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function RecycleBin({
+  onRestored,
+}) {
   const { t } = useI18n();
   const [items, setItems] = useState<TrashItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -261,4 +263,4 @@ export const RecycleBin: React.FC<RecycleBinProps> = ({ onRestored }) => {
       )}
     </div>
   );
-};
+});
