@@ -154,8 +154,9 @@ Organize the entire bookmark collection into 6-10 master categories on the Bookm
    - targetDomains: High-confidence domains that belong in this folder (e.g. ["github.com", "gitlab.com", "npm", "codepen.io"]).
    - keywords: Core topic keywords for title matching (e.g. ["code", "dev", "react", "programming"]).
 4. In dumpFolderIdsToDismantle, include IDs of temporary/dump/imported folders that should be emptied and removed.
-5. Respect user constraints (e.g. if user said "don't touch X", do not touch X).
-6. Output summary in ${targetLang}.`;
+5. In preservedFolderIds, include IDs of existing folders that are already well-structured and should be kept intact as-is.
+6. Respect user constraints (e.g. if user said "don't touch X", do not touch X).
+7. Output summary in ${targetLang}.`;
 
   const architectPrompt = `[USER REQUEST]
 "${userPrompt}"
@@ -192,6 +193,10 @@ ${cohesiveFolders.join('\n')}`;
     dumpFolderIdsToDismantle: z
       .array(z.string())
       .describe('IDs of dump/temporary/imported folders to empty and delete'),
+    preservedFolderIds: z
+      .array(z.string())
+      .optional()
+      .describe('IDs of cohesive existing folders to preserve as-is'),
     summary: z.string().describe('High-level architectural summary of the reorganization plan'),
   });
 
@@ -216,48 +221,86 @@ ${cohesiveFolders.join('\n')}`;
   });
 
   const dismantleFolderIds = new Set(blueprint.dumpFolderIdsToDismantle);
+  const preservedFolderIds = new Set(blueprint.preservedFolderIds || []);
   const categories = blueprint.categories;
 
-  // Bookmarks that MUST be processed:
-  // 1. Loose bookmarks on Bookmarks Bar
-  // 2. Bookmarks in dump folders to dismantle
-  // 3. Any bookmark whose domain matches a master category different from its current parent
+  // Detect whether this is a full archive reorganization (e.g. "entire library", "all bookmarks")
+  // vs selective triage (e.g. only loose items and dump folders)
+  const pLower = userPrompt.toLowerCase();
+  const isFullArchiveReorg =
+    pLower.includes('entire library') ||
+    pLower.includes('all bookmarks') ||
+    pLower.includes('reorganize all') ||
+    pLower.includes('edit all') ||
+    pLower.includes('tüm arşivi') ||
+    pLower.includes('bütün yer imleri') ||
+    pLower.includes('baştan sona') ||
+    pLower.includes('tümünü düzenle');
+
   const candidatesToRoute: FlatBookmark[] = [];
   const candidateIds = new Set<string>();
 
   for (const b of bookmarks) {
+    // 1. Loose bookmarks directly on Bookmarks Bar ('1') or Other Bookmarks ('2')
     if (b.parentId === '0' || b.parentId === '1' || b.parentId === '2') {
-      // Loose or bar items
       candidatesToRoute.push(b);
       candidateIds.add(b.id);
       continue;
     }
 
+    // 2. Bookmarks inside dump folders scheduled for dismantling
     if (dismantleFolderIds.has(b.parentId)) {
-      // Items inside dump folders
       candidatesToRoute.push(b);
       candidateIds.add(b.id);
       continue;
     }
 
-    // For all remaining items: check if they should be relocated into a master category
-    for (const cat of categories) {
-      if (matchesDomain(b.domain, cat.targetDomains)) {
-        // If it's already in that category or subfolder, no need to relocate
-        const inCategory =
-          b.parentId === cat.id ||
-          b.path.toLowerCase().includes(cat.title.toLowerCase()) ||
-          b.path.toLowerCase().includes(cat.id.toLowerCase());
-        if (!inCategory) {
+    // 3. Folders marked to be preserved as-is
+    if (preservedFolderIds.has(b.parentId)) {
+      continue;
+    }
+
+    // 4. Check if bookmark is already inside one of the master categories
+    const currentMasterCat = categories.find(
+      (cat) =>
+        b.parentId === cat.id ||
+        b.path.toLowerCase().includes(cat.title.toLowerCase()) ||
+        (!cat.isNew && b.path.toLowerCase().includes(cat.id.toLowerCase()))
+    );
+
+    if (currentMasterCat) {
+      // It's already in a master category!
+      // Only move if its domain strongly matches a DIFFERENT master category
+      const betterMatch = categories.find(
+        (cat) => cat.id !== currentMasterCat.id && matchesDomain(b.domain, cat.targetDomains)
+      );
+      if (betterMatch) {
+        candidatesToRoute.push(b);
+        candidateIds.add(b.id);
+      }
+      continue;
+    }
+
+    // 5. Bookmark is in a scattered/external folder
+    if (isFullArchiveReorg) {
+      // In Full Archive mode, all external/scattered bookmarks are consolidated!
+      candidatesToRoute.push(b);
+      candidateIds.add(b.id);
+    } else {
+      // In Selective mode, only route if domain matches a master category
+      for (const cat of categories) {
+        if (matchesDomain(b.domain, cat.targetDomains)) {
           candidatesToRoute.push(b);
           candidateIds.add(b.id);
+          break;
         }
-        break;
       }
     }
   }
 
-  console.log(`🎯 [Agent Harness] Total candidates to route: ${candidatesToRoute.length}`);
+  console.log(
+    `🎯 [Agent Harness] Mode: ${isFullArchiveReorg ? 'Full Archive' : 'Selective Triage'}. Candidates to route: ${candidatesToRoute.length}`
+  );
 
   // Routing destination map: bookmarkId -> { targetFolderId, reason }
   const routedDestinations = new Map<
