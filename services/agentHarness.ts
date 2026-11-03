@@ -62,6 +62,55 @@ function matchesKeywords(title: string, keywords: string[]): boolean {
   return false;
 }
 
+const DAILY_LAUNCHPAD_DOMAINS = new Set([
+  'mail.google.com',
+  'drive.google.com',
+  'sheets.google.com',
+  'docs.google.com',
+  'calendar.google.com',
+  'github.com',
+  'youtube.com',
+  'x.com',
+  'twitter.com',
+  'reddit.com',
+  'linkedin.com',
+  'figma.com',
+  'notion.so',
+  'chatgpt.com',
+  'claude.ai',
+  'producthunt.com',
+  'discord.com',
+  'web.whatsapp.com',
+  'google.com',
+  'google.com.tr',
+]);
+
+/**
+ * Pinned Launchpad Shield: Detects bookmarks deliberately kept directly on the
+ * Bookmarks Bar (empty title, icon-only favicon, or daily hub domains).
+ * These must NEVER be displaced into folders during bulk reorganization.
+ */
+function isPinnedLaunchpad(b: FlatBookmark): boolean {
+  if (b.parentId !== '1') return false;
+  // 1. Icon-only bookmark (empty title or very short title <= 2 chars)
+  if (!b.title || b.title.trim().length <= 2) return true;
+  // 2. High-traffic daily launchpad domain directly on bar
+  if (DAILY_LAUNCHPAD_DOMAINS.has(b.domain)) return true;
+  // 3. Extension or chrome URLs on bar
+  if (b.url.startsWith('chrome://') || b.url.startsWith('chrome-extension://')) return true;
+  return false;
+}
+
+/**
+ * Normalizes folder titles to match without emoji differences or casing
+ */
+function normalizeFolderTitle(str: string): string {
+  return str
+    .replace(/[^\p{L}\p{N}]/gu, '')
+    .toLowerCase()
+    .trim();
+}
+
 /**
  * Helper to split an array into chunks
  */
@@ -224,6 +273,22 @@ ${cohesiveFolders.join('\n')}`;
   const preservedFolderIds = new Set(blueprint.preservedFolderIds || []);
   const categories = blueprint.categories;
 
+  // DEDUPLICATION: Check if any master category title already exists on Bookmarks Bar ('1')
+  // This guarantees idempotency: never create duplicate folders on re-runs!
+  for (const cat of categories) {
+    const existingMatch = folders.find(
+      (f) =>
+        f.parentId === '1' &&
+        normalizeFolderTitle(f.title) === normalizeFolderTitle(cat.title)
+    );
+
+    if (existingMatch) {
+      cat.id = existingMatch.id;
+      cat.isNew = false;
+      cat.title = existingMatch.title;
+    }
+  }
+
   // Detect whether this is a full archive reorganization (e.g. "entire library", "all bookmarks")
   // vs selective triage (e.g. only loose items and dump folders)
   const pLower = userPrompt.toLowerCase();
@@ -241,6 +306,11 @@ ${cohesiveFolders.join('\n')}`;
   const candidateIds = new Set<string>();
 
   for (const b of bookmarks) {
+    // 0. Pinned Launchpad Shield: Never displace quick-launch icons from Bookmarks Bar!
+    if (isPinnedLaunchpad(b)) {
+      continue;
+    }
+
     // 1. Loose bookmarks directly on Bookmarks Bar ('1') or Other Bookmarks ('2')
     if (b.parentId === '0' || b.parentId === '1' || b.parentId === '2') {
       candidatesToRoute.push(b);
@@ -473,18 +543,64 @@ ${batchItems}`;
     });
   }
 
-  // 3. REMOVE actions for emptied dump folders
-  const candidateDumpFolders = folders.filter((f) => dismantleFolderIds.has(f.id));
-  for (const df of candidateDumpFolders) {
-    // Only remove if not root
-    if (df.id === '0' || df.id === '1' || df.id === '2') continue;
+  // 3. REMOVE actions for emptied old folders
+  // Calculate which folders become 100% empty after all planned moves
+  const folderBookmarkCounts = new Map<string, number>();
+  for (const b of bookmarks) {
+    folderBookmarkCounts.set(b.parentId, (folderBookmarkCounts.get(b.parentId) || 0) + 1);
+  }
+
+  for (const act of actions) {
+    if (act.action === 'MOVE') {
+      const orig = bookmarks.find((b) => b.id === act.bookmarkId);
+      if (orig && orig.parentId) {
+        const count = folderBookmarkCounts.get(orig.parentId) || 1;
+        folderBookmarkCounts.set(orig.parentId, Math.max(0, count - 1));
+      }
+    }
+  }
+
+  const emptiedFolderIds = new Set<string>(dismantleFolderIds);
+  const sortedFoldersByDepth = [...folders].sort(
+    (a, b) => b.path.split('/').length - a.path.split('/').length
+  );
+
+  const PROTECTED_ROOTS = new Set(['0', '1', '2']);
+  const SACRED_EMOJI_NAMES = new Set(['🏠', '🤖', '👨‍🍳', 'b']);
+
+  for (const f of sortedFoldersByDepth) {
+    if (PROTECTED_ROOTS.has(f.id)) continue;
+    if (preservedFolderIds.has(f.id)) continue;
+
+    // Do NOT delete sacred user folders directly on bar
+    if (f.parentId === '1' && SACRED_EMOJI_NAMES.has(f.title.trim().toLowerCase())) {
+      continue;
+    }
+
+    // Do NOT delete any folder that is a designated master category
+    if (categories.some((c) => c.id === f.id)) continue;
+
+    const remainingBookmarks = folderBookmarkCounts.get(f.id) || 0;
+    const childFolders = folders.filter((cf) => cf.parentId === f.id);
+    const hasActiveChildFolders = childFolders.some((cf) => !emptiedFolderIds.has(cf.id));
+
+    if (remainingBookmarks <= 0 && !hasActiveChildFolders) {
+      emptiedFolderIds.add(f.id);
+    }
+  }
+
+  for (const fId of emptiedFolderIds) {
+    if (PROTECTED_ROOTS.has(fId)) continue;
+    if (preservedFolderIds.has(fId)) continue;
+    const f = folders.find((item) => item.id === fId);
+    if (!f) continue;
 
     actions.push({
       action: 'REMOVE',
-      id: df.id,
+      id: f.id,
       isFolder: true,
-      title: df.path,
-      reason: isTr ? 'Boşaltılan geçici klasör temizlendi' : 'Dismantled emptied dump folder',
+      title: f.path,
+      reason: isTr ? 'Boşaltılan eski klasör temizlendi' : 'Dismantled emptied folder',
     });
   }
 
