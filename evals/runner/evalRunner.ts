@@ -28,9 +28,7 @@ export async function runEvaluation(options: RunEvalOptions): Promise<EvalScorec
 
   const datasetPath = path.join(DATASETS_DIR, `${datasetName}.json`);
   if (!fs.existsSync(datasetPath)) {
-    throw new Error(
-      `Dataset file not found: ${datasetPath}. Run 'bun run eval:prepare' first.`
-    );
+    throw new Error(`Dataset file not found: ${datasetPath}. Run 'bun run eval:prepare' first.`);
   }
 
   const rawTree: BookmarkTreeNode[] = JSON.parse(fs.readFileSync(datasetPath, 'utf-8'));
@@ -260,9 +258,7 @@ function generateMockPlan(
   }
 
   // Remove dump folders
-  const dumpFolders = folders.filter((f: any) =>
-    /^(other|needfix|temp|imported)/i.test(f.title)
-  );
+  const dumpFolders = folders.filter((f: any) => /^(other|needfix|temp|imported)/i.test(f.title));
   for (const df of dumpFolders) {
     actions.push({
       action: 'REMOVE',

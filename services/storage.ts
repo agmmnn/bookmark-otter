@@ -40,7 +40,8 @@ export async function getSettings(): Promise<AppSettings> {
       openaiApiKey: typeof process !== 'undefined' ? process.env?.OPENAI_API_KEY || '' : '',
       anthropicApiKey: typeof process !== 'undefined' ? process.env?.ANTHROPIC_API_KEY || '' : '',
       aiProvider:
-        (typeof process !== 'undefined' ? (process.env?.AI_PROVIDER as any) : undefined) || 'google',
+        (typeof process !== 'undefined' ? (process.env?.AI_PROVIDER as any) : undefined) ||
+        'google',
       modelName:
         typeof process !== 'undefined'
           ? process.env?.MODEL_NAME || 'gemini-2.5-flash'

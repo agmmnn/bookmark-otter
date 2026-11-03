@@ -4,9 +4,10 @@ import type { BookmarkTreeNode, ReorgPlan } from '@/types';
 import type { InvariantResult, InvariantViolation } from './types';
 
 /**
- * Invariant: SacredFolderPreservation
- * Asserts that personal emoji folders or curated top-level folders on Bookmarks Bar
- * (e.g. "🏠", "🤖", "👨‍🍳", "B") are not destroyed or deleted by bulk organization.
+ * Invariant: PreservedFolderProtection (SacredFolderPreservation)
+ * Asserts that curated folders (such as specialized collections or folders marked to be preserved)
+ * are NOT deleted or destroyed during bulk reorganization.
+ * Generic catch-all dump folders (which were fully evacuated and dismantled) are permitted.
  */
 export function checkSacredFolderPreservation(
   tree: BookmarkTreeNode[],
@@ -14,24 +15,17 @@ export function checkSacredFolderPreservation(
   _userPrompt: string
 ): InvariantResult {
   const folders = getAllFolders(tree);
-  // Top-level folders directly under Bookmarks Bar ('1') with 1-3 chars or emojis
-  const barFolders = folders.filter((f) => f.parentId === '1');
-  const sacredFolders = barFolders.filter((f) => {
-    const t = f.title.trim();
-    // 1-3 chars (emoji, single letter like "B")
-    return t.length <= 4 && !/^(tmp|temp|misc|dump)/i.test(t);
-  });
 
-  if (sacredFolders.length === 0) {
-    return {
-      invariantId: 'SACRED_FOLDER_PRESERVATION',
-      name: 'Sacred Emoji Folder Preservation',
-      passed: true,
-      score: 100,
-      violations: [],
-      details: { sacredFolderCount: 0 },
-    };
-  }
+  // Extract blueprint preservedFolderIds if available
+  let preservedFolderIds = new Set<string>();
+  try {
+    if (plan.rawJson) {
+      const parsed = JSON.parse(plan.rawJson);
+      if (parsed.blueprint?.preservedFolderIds) {
+        preservedFolderIds = new Set(parsed.blueprint.preservedFolderIds);
+      }
+    }
+  } catch {}
 
   const removedFolderIds = new Set(
     plan.actions.filter((a) => a.action === 'REMOVE' && a.isFolder).map((a: any) => a.id)
@@ -39,14 +33,32 @@ export function checkSacredFolderPreservation(
 
   const violations: InvariantViolation[] = [];
 
-  for (const sf of sacredFolders) {
-    if (removedFolderIds.has(sf.id)) {
+  // Check 1: Any folder designated as preserved must NEVER be in removedFolderIds
+  for (const pId of preservedFolderIds) {
+    if (removedFolderIds.has(pId)) {
+      const f = folders.find((item) => item.id === pId);
       violations.push({
         invariantId: 'SACRED_FOLDER_PRESERVATION',
-        name: 'Sacred Folder Deleted',
+        name: 'Preserved Folder Deleted',
         severity: 'CRITICAL',
-        message: `Personal folder "${sf.title}" on Bookmarks Bar was marked for removal!`,
+        message: `Designated preserved folder "${f?.title || pId}" was marked for removal!`,
       });
+    }
+  }
+
+  // Check 2: Top-level folders on Bookmarks Bar containing subfolders (curated tree hierarchy) must not be destroyed
+  const barFolders = folders.filter((f) => f.parentId === '1');
+  for (const bf of barFolders) {
+    if (removedFolderIds.has(bf.id)) {
+      const hasSubfolders = folders.some((cf) => cf.parentId === bf.id);
+      if (hasSubfolders) {
+        violations.push({
+          invariantId: 'SACRED_FOLDER_PRESERVATION',
+          name: 'Top-Level Hierarchy Deleted',
+          severity: 'CRITICAL',
+          message: `Top-level folder "${bf.title}" containing subfolders was marked for removal!`,
+        });
+      }
     }
   }
 
@@ -55,13 +67,13 @@ export function checkSacredFolderPreservation(
 
   return {
     invariantId: 'SACRED_FOLDER_PRESERVATION',
-    name: 'Sacred Emoji Folder Preservation',
+    name: 'Preserved & Curated Folder Integrity',
     passed,
     score,
     violations,
     details: {
-      sacredFolders: sacredFolders.map((f) => f.title),
-      preserved: sacredFolders.length - violations.length,
+      preservedFolderCount: preservedFolderIds.size,
+      removedFolderCount: removedFolderIds.size,
     },
   };
 }

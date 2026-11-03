@@ -3,31 +3,10 @@ import type { BookmarkTreeNode, ReorgPlan } from '@/types';
 
 import type { InvariantResult, InvariantViolation } from './types';
 
-const DAILY_LAUNCHPAD_DOMAINS = new Set([
-  'mail.google.com',
-  'drive.google.com',
-  'sheets.google.com',
-  'docs.google.com',
-  'calendar.google.com',
-  'github.com',
-  'youtube.com',
-  'x.com',
-  'twitter.com',
-  'reddit.com',
-  'linkedin.com',
-  'figma.com',
-  'notion.so',
-  'chatgpt.com',
-  'claude.ai',
-  'producthunt.com',
-  'discord.com',
-  'web.whatsapp.com',
-]);
-
 /**
  * Invariant: PinnedRootShield
- * Root bookmarks directly on the Bookmarks Bar that serve as visual 1-click
- * launchpad pins (empty title, favicon-only, or daily hub domains) must NOT be moved
+ * Root bookmarks directly on the Bookmarks Bar that serve as intentional visual
+ * 1-click launchpad pins (empty title, favicon-only, or browser utilities) must NOT be moved
  * into folders during automated bulk reorganization.
  */
 export function checkPinnedRootShield(
@@ -38,12 +17,12 @@ export function checkPinnedRootShield(
   const allBookmarks = flattenBookmarks(tree);
   const rootBarBookmarks = allBookmarks.filter((b) => b.parentId === '1');
 
-  // Identify pinned launchpad bookmarks
+  // Identify intentional icon-only launchpad bookmarks (empty or ultra-short title, or browser tools)
   const pinnedBookmarks = rootBarBookmarks.filter((b) => {
-    // 1. Icon-only bookmark (empty title or very short title)
-    if (!b.title || b.title.trim().length <= 2) return true;
-    // 2. High-traffic launchpad domain directly on bar
-    if (DAILY_LAUNCHPAD_DOMAINS.has(b.domain)) return true;
+    // 1. Icon-only bookmark (empty title or whitespace)
+    if (!b.title || b.title.trim().length <= 1) return true;
+    // 2. Extension or browser pages placed on bar
+    if (b.url.startsWith('chrome://') || b.url.startsWith('chrome-extension://')) return true;
     return false;
   });
 

@@ -22,12 +22,6 @@ export interface AgentHarnessParams {
 }
 
 /**
- * Identify dump/scratch folders that should typically be evacuated and dismantled
- */
-const DUMP_FOLDER_REGEX =
-  /^(other|needfix|temp|yeni|misc|çöp|cop|dump|imported|di[gğ]er|bookmarks\s*bar\s*\/\s*imported)/i;
-
-/**
  * Domain matching helper: checks exact domain or subdomain match
  * e.g. "gist.github.com" matches "github.com"
  */
@@ -59,45 +53,6 @@ function matchesKeywords(title: string, keywords: string[]): boolean {
       return true;
     }
   }
-  return false;
-}
-
-const DAILY_LAUNCHPAD_DOMAINS = new Set([
-  'mail.google.com',
-  'drive.google.com',
-  'sheets.google.com',
-  'docs.google.com',
-  'calendar.google.com',
-  'github.com',
-  'youtube.com',
-  'x.com',
-  'twitter.com',
-  'reddit.com',
-  'linkedin.com',
-  'figma.com',
-  'notion.so',
-  'chatgpt.com',
-  'claude.ai',
-  'producthunt.com',
-  'discord.com',
-  'web.whatsapp.com',
-  'google.com',
-  'google.com.tr',
-]);
-
-/**
- * Pinned Launchpad Shield: Detects bookmarks deliberately kept directly on the
- * Bookmarks Bar (empty title, icon-only favicon, or daily hub domains).
- * These must NEVER be displaced into folders during bulk reorganization.
- */
-function isPinnedLaunchpad(b: FlatBookmark): boolean {
-  if (b.parentId !== '1') return false;
-  // 1. Icon-only bookmark (empty title or very short title <= 2 chars)
-  if (!b.title || b.title.trim().length <= 2) return true;
-  // 2. High-traffic daily launchpad domain directly on bar
-  if (DAILY_LAUNCHPAD_DOMAINS.has(b.domain)) return true;
-  // 3. Extension or chrome URLs on bar
-  if (b.url.startsWith('chrome://') || b.url.startsWith('chrome-extension://')) return true;
   return false;
 }
 
@@ -153,11 +108,12 @@ export async function runMultiStepAgentHarness(params: AgentHarnessParams): Prom
     percentage: 10,
   });
 
-  const dumpFolders = folders.filter((f) => DUMP_FOLDER_REGEX.test(f.title.trim()));
-  const dumpFolderIds = new Set(dumpFolders.map((f) => f.id));
-  const looseBookmarks = bookmarks.filter(
-    (b) => (b.parentId === '1' || b.parentId === '2') && b.url && !b.url.startsWith('chrome://')
-  );
+  const barBookmarks = bookmarks.filter((b) => b.parentId === '1');
+  const barBookmarkLines = barBookmarks.slice(0, 50).map((b) => {
+    const titleLabel =
+      b.title && b.title.trim().length > 0 ? `"${b.title}"` : '(icon-only favicon pin)';
+    return `- ID: "${b.id}" | Title: ${titleLabel} | Domain: ${b.domain || 'N/A'}`;
+  });
 
   // Compute domain frequencies
   const domainMap = new Map<string, { count: number; sampleFolders: Set<string> }>();
@@ -179,47 +135,68 @@ export async function runMultiStepAgentHarness(params: AgentHarnessParams): Prom
       `- ${domain} (${data.count} items) -> Existing: [${Array.from(data.sampleFolders).slice(0, 3).join(', ')}]`
   );
 
-  const cohesiveFolders = folders
-    .filter((f) => f.id !== '0' && f.id !== '1' && f.id !== '2' && !dumpFolderIds.has(f.id))
-    .slice(0, 25)
-    .map((f) => {
-      const count = bookmarks.filter((b) => b.parentId === f.id).length;
-      return `${f.id}|${f.parentId || '1'}|${f.path} (${count} items)`;
-    });
+  const nonRootFolders = folders.filter((f) => f.id !== '0' && f.id !== '1' && f.id !== '2');
+  const sortedFoldersForOverview = [...nonRootFolders].sort((a, b) => {
+    // Top-level bar folders first
+    if (a.parentId === '1' && b.parentId !== '1') return -1;
+    if (b.parentId === '1' && a.parentId !== '1') return 1;
+    return 0;
+  });
+
+  const folderOverviewLines = sortedFoldersForOverview.slice(0, 50).map((f) => {
+    const count = bookmarks.filter((b) => b.parentId === f.id).length;
+    return `${f.id}|${f.parentId || '1'}|${f.path} (${count} items)`;
+  });
 
   const model = await getLanguageModel();
 
-  const architectSystem = `You are "Bookmark Otter Architecture Agent", a world-class information architect.
+  const architectSystem = `You are "Bookmark Otter Architecture Agent", a world-class, multilingual information architect.
 Your job is to design a clean, cohesive, top-level Taxonomy Blueprint for the user's bookmarks library.
 
 [GOAL]
 Organize the entire bookmark collection into 6-10 master categories on the Bookmarks Bar (parentId: "1").
 
-[RULES]
-1. Reuse existing well-structured folders where appropriate (set isNew: false, id: existing folder ID).
-2. For new categories, set isNew: true, id: "tmp_cat_<slug>" (e.g. "tmp_cat_dev", "tmp_cat_crypto", "tmp_cat_design", "tmp_cat_tools").
-3. Each category MUST specify:
-   - title: Human-friendly, aesthetic title with 1 emoji (e.g. "💻 Development", "📈 Crypto & Web3", "🎨 Design & Creative", "📚 Reading & Docs", "🛠️ Utilities & Tools").
-   - targetDomains: High-confidence domains that belong in this folder (e.g. ["github.com", "gitlab.com", "npm", "codepen.io"]).
-   - keywords: Core topic keywords for title matching (e.g. ["code", "dev", "react", "programming"]).
-4. In dumpFolderIdsToDismantle, include IDs of temporary/dump/imported folders that should be emptied and removed.
-5. In preservedFolderIds, include IDs of existing folders that are already well-structured and should be kept intact as-is.
-6. Respect user constraints (e.g. if user said "don't touch X", do not touch X).
-7. Output summary in ${targetLang}.`;
+[RULES & INTELLIGENCE - FULLY DYNAMIC & MULTILINGUAL]
+1. REUSE EXISTING FOLDERS:
+   - If an existing folder is already cohesive and well-structured, reuse it (isNew: false, id: existing folder ID).
+   - In preservedFolderIds, list any existing folders that should remain intact as-is (e.g. specialized personal archives, projects).
+
+2. CATCH-ALL & DUMP FOLDERS (ANY LANGUAGE):
+   - Analyze the folder list dynamically. Identify folders that serve as temporary holding pens, unfiled dumps, scratchpads, or imports in ANY language (e.g. "Inbox", "Unsorted", "Dumping ground", "Müll", "整理中", "needfix", "other", "imported", "misc", "temp", etc.).
+   - Return their IDs in dumpFolderIdsToDismantle. Their contents will be redistributed to proper thematic categories and the empty folder removed.
+
+3. PINNED QUICK-ACCESS LAUNCHPAD ON BAR:
+   - Inspect [BOOKMARKS BAR DIRECT ITEMS]. Users frequently place intentional 1-click launchpad bookmarks directly on the Bookmarks Bar (daily web apps, productivity dashboards, search tools, or icon-only bookmarks).
+   - In pinnedBarBookmarkIdsToKeep, return the IDs of bookmarks that serve as quick launchpins and SHOULD NOT be moved into subfolders.
+   - Only leave unlisted any bookmarks that are clearly unfiled clutter that belong in an archive folder.
+
+4. CATEGORIES:
+   - Each category MUST specify:
+     * title: Aesthetic title with 1 emoji (e.g. "💻 Development", "📈 Crypto & Web3", "🎨 Design & Creative", "📚 Reading & Docs", "🛠️ Utilities & Tools").
+     * targetDomains: High-confidence domains that belong in this folder.
+     * keywords: Core topic keywords for title matching.
+     * reason: Short explanation.
+
+5. RESPECT USER DIRECTIVES:
+   - Respect any explicit user constraints (e.g. "don't touch X").
+   - Output summary in ${targetLang}.`;
 
   const architectPrompt = `[USER REQUEST]
 "${userPrompt}"
 
 [LIBRARY STATS]
 Total Bookmarks: ${totalCount}
-Loose Bookmarks on Bar: ${looseBookmarks.length}
-Dump Folders: ${dumpFolders.map((f) => `${f.title} (ID: ${f.id})`).join(', ') || 'None'}
+Total Folders: ${folders.length}
+Direct Bookmarks on Bar: ${barBookmarks.length}
+
+[BOOKMARKS BAR DIRECT ITEMS (Examine for intentional quick-launch pins vs unfiled clutter)]
+${barBookmarkLines.join('\n')}
 
 [TOP DOMAIN CLUSTERS]
 ${domainFrequencyLines.join('\n')}
 
-[EXISTING COHESIVE FOLDERS]
-${cohesiveFolders.join('\n')}`;
+[EXISTING FOLDERS (id | parentId | path | count)]
+${folderOverviewLines.join('\n')}`;
 
   const CategorySchema = z.object({
     id: z
@@ -241,11 +218,19 @@ ${cohesiveFolders.join('\n')}`;
       .describe('6-10 master categories covering the entire library'),
     dumpFolderIdsToDismantle: z
       .array(z.string())
-      .describe('IDs of dump/temporary/imported folders to empty and delete'),
+      .describe(
+        'IDs of generic catch-all, dump, or temporary holding folders in any language to dismantle and remove'
+      ),
     preservedFolderIds: z
       .array(z.string())
       .optional()
       .describe('IDs of cohesive existing folders to preserve as-is'),
+    pinnedBarBookmarkIdsToKeep: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'IDs of intentional quick-access launchpad bookmarks on Bookmarks Bar that should remain pinned on the bar'
+      ),
     summary: z.string().describe('High-level architectural summary of the reorganization plan'),
   });
 
@@ -271,15 +256,14 @@ ${cohesiveFolders.join('\n')}`;
 
   const dismantleFolderIds = new Set(blueprint.dumpFolderIdsToDismantle);
   const preservedFolderIds = new Set(blueprint.preservedFolderIds || []);
+  const pinnedBarIds = new Set(blueprint.pinnedBarBookmarkIdsToKeep || []);
   const categories = blueprint.categories;
 
   // DEDUPLICATION: Check if any master category title already exists on Bookmarks Bar ('1')
   // This guarantees idempotency: never create duplicate folders on re-runs!
   for (const cat of categories) {
     const existingMatch = folders.find(
-      (f) =>
-        f.parentId === '1' &&
-        normalizeFolderTitle(f.title) === normalizeFolderTitle(cat.title)
+      (f) => f.parentId === '1' && normalizeFolderTitle(f.title) === normalizeFolderTitle(cat.title)
     );
 
     if (existingMatch) {
@@ -306,8 +290,9 @@ ${cohesiveFolders.join('\n')}`;
   const candidateIds = new Set<string>();
 
   for (const b of bookmarks) {
-    // 0. Pinned Launchpad Shield: Never displace quick-launch icons from Bookmarks Bar!
-    if (isPinnedLaunchpad(b)) {
+    // 0. Pinned Launchpad Shield:
+    // If the LLM identified it as a pinned launchpad OR if user made it icon-only (empty title), preserve on bar!
+    if (b.parentId === '1' && (pinnedBarIds.has(b.id) || !b.title || b.title.trim().length <= 1)) {
       continue;
     }
 
@@ -566,14 +551,13 @@ ${batchItems}`;
   );
 
   const PROTECTED_ROOTS = new Set(['0', '1', '2']);
-  const SACRED_EMOJI_NAMES = new Set(['🏠', '🤖', '👨‍🍳', 'b']);
 
   for (const f of sortedFoldersByDepth) {
     if (PROTECTED_ROOTS.has(f.id)) continue;
     if (preservedFolderIds.has(f.id)) continue;
 
-    // Do NOT delete sacred user folders directly on bar
-    if (f.parentId === '1' && SACRED_EMOJI_NAMES.has(f.title.trim().toLowerCase())) {
+    // Do NOT delete top-level folders directly on the Bookmarks Bar unless explicitly designated as a dump folder to dismantle
+    if (f.parentId === '1' && !dismantleFolderIds.has(f.id)) {
       continue;
     }
 

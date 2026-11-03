@@ -44,8 +44,7 @@ export function parseNetscapeBookmarkHtml(html: string): BookmarkTreeNode[] {
       let title = h3Match[2] || '';
       title = unescapeHtml(title).trim();
 
-      const isBar =
-        attrs.includes('PERSONAL_TOOLBAR_FOLDER="true"') || title === 'Bookmarks Bar';
+      const isBar = attrs.includes('PERSONAL_TOOLBAR_FOLDER="true"') || title === 'Bookmarks Bar';
 
       let folder: BookmarkTreeNode;
       if (isBar) {

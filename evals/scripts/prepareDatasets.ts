@@ -1,10 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {
-  parseNetscapeBookmarkFile,
-  getTreeStats,
-} from '../parsers/netscapeBookmarkParser';
+import { parseNetscapeBookmarkFile, getTreeStats } from '../parsers/netscapeBookmarkParser';
 
 const CANARY_PATH = '/Users/agm/Documents/canary-bookmarks.html';
 const FULL_PATH = '/Users/agm/Documents/bookmarks_11_2_26.html';
