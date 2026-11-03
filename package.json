@@ -19,6 +19,10 @@
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
+    "eval": "bun run evals/scripts/runEval.ts",
+    "eval:canary": "bun run evals/scripts/runEval.ts --dataset canary",
+    "eval:full": "bun run evals/scripts/runEval.ts --dataset poweruser-full",
+    "eval:prepare": "bun run evals/scripts/prepareDatasets.ts",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

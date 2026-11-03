@@ -29,3 +29,11 @@ web-ext.config.ts
 .claude
 skills-lock.json
 Other
+
+.env*
+eval-settings.json
+.eval-cache
+evals/runs
+
+evals/datasets
+

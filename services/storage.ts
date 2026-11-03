@@ -20,7 +20,35 @@ const DEFAULT_SETTINGS: AppSettings = {
   language: 'en',
 };
 
+let cliSettingsOverride: AppSettings | null = null;
+
+/**
+ * For CLI evaluation harness: set settings in memory without browser.storage
+ */
+export function setCliSettings(settings: AppSettings): void {
+  cliSettingsOverride = settings;
+}
+
 export async function getSettings(): Promise<AppSettings> {
+  if (cliSettingsOverride) {
+    return cliSettingsOverride;
+  }
+  if (typeof browser === 'undefined' || !browser.storage?.local) {
+    return {
+      ...DEFAULT_SETTINGS,
+      geminiApiKey: typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY || '' : '',
+      openaiApiKey: typeof process !== 'undefined' ? process.env?.OPENAI_API_KEY || '' : '',
+      anthropicApiKey: typeof process !== 'undefined' ? process.env?.ANTHROPIC_API_KEY || '' : '',
+      aiProvider:
+        (typeof process !== 'undefined' ? (process.env?.AI_PROVIDER as any) : undefined) || 'google',
+      modelName:
+        typeof process !== 'undefined'
+          ? process.env?.MODEL_NAME || 'gemini-2.5-flash'
+          : 'gemini-2.5-flash',
+      language:
+        (typeof process !== 'undefined' ? (process.env?.APP_LANG as any) : undefined) || 'en',
+    };
+  }
   const data = await browser.storage.local.get('settings');
   return { ...DEFAULT_SETTINGS, ...(data.settings as AppSettings) };
 }
