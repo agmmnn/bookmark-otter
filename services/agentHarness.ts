@@ -154,7 +154,26 @@ export async function runMultiStepAgentHarness(params: AgentHarnessParams): Prom
 Your job is to design a clean, cohesive, top-level Taxonomy Blueprint for the user's bookmarks library.
 
 [GOAL]
-Organize the entire bookmark collection into 6-10 master categories on the Bookmarks Bar (parentId: "1").
+Organize the entire bookmark collection into 5-8 master categories on the Bookmarks Bar (parentId: "1") adhering to professional Personal Knowledge Management (PKM) standards.
+
+[CORE INFORMATION ARCHITECTURE LAWS]
+1. TWO-LEVEL SHALLOW HIERARCHY LAW:
+   - Deep nested folder trees are "visual graveyards" where discovery probability drops to zero.
+   - Enforce a strict maximum depth of 2 levels (Bookmarks Bar -> Category -> Subfolder). Never create 3+ deep branches.
+   - Enforce 5 to 8 broad top-level categories max to fit human working memory limits (Miller's Law).
+
+2. METHODOLOGY AWARENESS:
+   - If the user requests or hints at a specific organizational methodology, rigorously apply its structural rules:
+     * PARA Method: Use containers "1_Projects" (active finite outcomes), "2_Areas" (ongoing responsibilities), "3_Resources" (topic references & docs), and "4_Archives" (completed/inactive).
+     * Frequency (Hot-Warm-Cold): Keep daily apps as bar launchpins, create "⚡ Weekly" (active web tools), "📅 Monthly" (admin/billing/panels), "🧊 Cold Storage" (deep archives).
+     * Johnny.Decimal: Use numeric category bands (e.g. "10-19 Dev & Code", "20-29 Design", "30-39 Life & Finance") with strict 2-level depth.
+     * Verb-Based (Action): Use action verbs rather than nouns (e.g. "🛠️ Build & Dev", "📖 Read & Research", "🎓 Learn & Courses", "🛒 Buy & Wishlist").
+     * Persona / Role: Isolate life contexts (e.g. "👨‍💻 Work & Engineering", "🚀 Indie & Projects", "🏠 Home & Finance", "🎨 Hobbies & Personal").
+     * Classic Shallow Taxonomy: 5 to 8 broad thematic discipline categories (e.g. "💻 Development", "🎨 Design", "📈 Crypto & Finance", "📚 Knowledge & Docs", "🛠️ Utilities & Tools").
+
+3. TEMPORARY VS. DURABLE KNOWLEDGE ASSETS:
+   - Distinguish short-lived operational saves (transient discussion threads, purchase evaluations, temporary tickets) from durable reference documentation.
+   - Do not pollute permanent reference archives with ephemeral clutter; route them to a triage/temporary holding container or dedicated category.
 
 [RULES & INTELLIGENCE - FULLY DYNAMIC & MULTILINGUAL]
 1. REUSE EXISTING FOLDERS:
@@ -172,7 +191,7 @@ Organize the entire bookmark collection into 6-10 master categories on the Bookm
 
 4. CATEGORIES:
    - Each category MUST specify:
-     * title: Aesthetic title with 1 emoji (e.g. "💻 Development", "📈 Crypto & Web3", "🎨 Design & Creative", "📚 Reading & Docs", "🛠️ Utilities & Tools").
+     * title: Aesthetic title with 1 emoji (or numeric index if Johnny.Decimal requested).
      * targetDomains: High-confidence domains that belong in this folder.
      * keywords: Core topic keywords for title matching.
      * reason: Short explanation.

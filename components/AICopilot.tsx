@@ -32,6 +32,7 @@ import type { FlatBookmark, FlatFolder, ReorgAction, ReorgPlan } from '@/types';
 
 import { DiffPreview } from './DiffPreview';
 import { MentionMenu, type MentionItem } from './MentionMenu';
+import { MethodologySelector } from './MethodologySelector';
 
 interface AICopilotProps {
   onPlanApplied: () => void;
@@ -53,6 +54,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   const [analyzedCount, setAnalyzedCount] = useState<number>(0);
   const [scopeType, setScopeType] = useState<'targeted' | 'clustered' | 'full'>('full');
   const [targetedNames, setTargetedNames] = useState<string[]>([]);
+  const [activeMethodologyId, setActiveMethodologyId] = useState<string | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [appliedSuccess, setAppliedSuccess] = useState<{
     count: number;
@@ -520,6 +522,21 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
               </span>
             </p>
 
+            {/* Architecture Methodologies (PARA, Johnny.Decimal, Hot-Warm-Cold, etc.) */}
+            <div className="pt-1">
+              <MethodologySelector
+                lang={lang}
+                activeMethodologyId={activeMethodologyId}
+                onSelectMethodology={(preset) => {
+                  setActiveMethodologyId(preset.id);
+                  setPromptText(lang === 'tr' ? preset.prompt.tr : preset.prompt.en);
+                  if (textareaRef.current) {
+                    textareaRef.current.focus();
+                  }
+                }}
+              />
+            </div>
+
             {/* Quick Prompt Recipe Chips */}
             <div className="space-y-1.5 pt-2">
               <span className="text-muted-foreground/80 block px-1 text-[9.5px] font-semibold tracking-wider uppercase">
@@ -533,6 +550,12 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                         label: 'Tümünü Düzenle',
                         prompt:
                           'Tüm yer imlerimi analiz et ve 6-8 ana tematik klasör altında baştan sona düzenle.',
+                      },
+                      {
+                        icon: '🎯',
+                        label: 'Favicon Launchpad',
+                        prompt:
+                          'Yer İmleri Çubuğundaki doğrudan web araçlarının başlıklarını temizle, yalnızca favicon ikonları bırakarak 1-tıkla hızlı başlatıcı çubuğu oluştur.',
                       },
                       {
                         icon: '🧹',
@@ -564,6 +587,12 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                         label: 'Edit All',
                         prompt:
                           'Analyze all bookmarks and reorganize the entire library into cohesive thematic folders.',
+                      },
+                      {
+                        icon: '🎯',
+                        label: 'Favicon Launchpad',
+                        prompt:
+                          'Strip text titles of direct bookmarks bar web apps, leaving only clean favicon icons to optimize 300% horizontal bar space.',
                       },
                       {
                         icon: '🧹',
