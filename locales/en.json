@@ -72,7 +72,7 @@
   "undoSuccess": "Changes reverted successfully!",
   "undoFailed": "Could not revert changes.",
   "requestLabel": "Your Request:",
-  "languageHint": "Natural English or Turkish",
+  "languageHint": "Any language",
   "inputPlaceholder": "e.g. Group all Rust, Python and JS bookmarks into 'Engineering / Languages' and clean up titles...",
   "generatePlanTooltip": "Generate Plan (Cmd+Enter)",
   "diffTitle": "Proposed Reorganization Plan",

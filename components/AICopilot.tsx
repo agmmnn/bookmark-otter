@@ -640,8 +640,8 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
               onKeyDown={handleKeyDown}
               placeholder={
                 lang === 'tr'
-                  ? 'Doğal Türkçe veya İngilizce yazın — hedeflemek için @ kullanın (ör. @"needfix" dokunma, @"dev" düzenle)...'
-                  : 'Write in English or Turkish — type @ to target folders or links (e.g. protect @"needfix", group into @"Dev")...'
+                  ? 'İstediğiniz dilde yazın — hedeflemek için @ kullanın (ör. @"İş" dokunma, @"Okuma Listesi" düzenle)...'
+                  : 'Write in any language — type @ to target folders or links (e.g. keep @"Work", organize @"Reading List")...'
               }
               className="border-border/80 focus-visible:border-ring min-h-[92px] resize-none pr-12 pb-9 text-xs transition-shadow duration-150 focus-visible:ring-1"
               disabled={isLoading}

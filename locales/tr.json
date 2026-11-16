@@ -72,7 +72,7 @@
   "undoSuccess": "Değişiklikler başarıyla geri alındı!",
   "undoFailed": "Değişiklikler geri alınamadı.",
   "requestLabel": "Düzenleme İsteğiniz:",
-  "languageHint": "Doğal Türkçe veya İngilizce",
+  "languageHint": "Herhangi bir dil",
   "inputPlaceholder": "Örn: Dağınık frontend kütüphanelerini 'Tasarım & UI' altına taşı ve başlıkları sadeleştir...",
   "generatePlanTooltip": "Plan Oluştur (Cmd+Enter)",
   "diffTitle": "Önerilen Düzenleme Planı",
