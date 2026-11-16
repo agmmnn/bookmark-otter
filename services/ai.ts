@@ -291,18 +291,5 @@ ${params.compactTreeDSL}`;
   };
 
   // 100% Local Hydration Guarantee: Resolve all bookmark titles, URLs, domains, and folder paths
-  const hydratedPlan = params.tree ? hydrateReorgPlan(rawPlan, params.tree) : rawPlan;
-
-  // Log full debug payload for developer inspection
-  console.group('🦦 [Bookmark Otter] AI Reorganization Debug Info');
-  console.log('%c1. USER PROMPT:', 'color: #3b82f6; font-weight: bold;', params.userPrompt);
-  console.log(
-    '%c2. TREE DSL SENT TO AI:\n',
-    'color: #10b981; font-weight: bold;\n',
-    params.compactTreeDSL
-  );
-  console.log('%c3. HYDRATED ACTION PLAN:', 'color: #f59e0b; font-weight: bold;', hydratedPlan);
-  console.groupEnd();
-
-  return hydratedPlan;
+  return params.tree ? hydrateReorgPlan(rawPlan, params.tree) : rawPlan;
 }

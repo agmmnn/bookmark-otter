@@ -98,7 +98,7 @@
   "themeSystemDesc": "Following system appearance",
   "themeDarkDesc": "Dark appearance enabled",
   "themeLightDesc": "Light appearance enabled",
-  "privacyNotice": "🔒 Your API key is stored locally in your browser storage only. Never sent to any external server.",
+  "privacyNotice": "🔒 Stored only on this device. Your API key and bookmark metadata (titles, URLs, folder names) are sent only to your selected AI provider when you use AI features.",
   "savedToast": "Saved!",
   "saveBtn": "Save Settings",
   "recycleBinTitle": "Recycle Bin",

@@ -98,7 +98,7 @@
   "themeSystemDesc": "Sistem teması takip ediliyor",
   "themeDarkDesc": "Koyu tema etkin",
   "themeLightDesc": "Açık tema etkin",
-  "privacyNotice": "🔒 API anahtarınız sadece tarayıcınızın yerel hafızasında saklanır. Hiçbir harici sunucuya iletilmez.",
+  "privacyNotice": "🔒 Yalnızca bu cihazda saklanır. API anahtarınız ve yer imi verileriniz (başlık, URL, klasör adları) sadece AI özelliklerini kullandığınızda seçtiğiniz sağlayıcıya gönderilir.",
   "savedToast": "Kaydedildi!",
   "saveBtn": "Ayarları Kaydet",
   "recycleBinTitle": "Geri Dönüşüm Kutusu",

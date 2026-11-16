@@ -88,14 +88,16 @@ export async function runMultiStepAgentHarness(params: AgentHarnessParams): Prom
   const { userPrompt, tree, onProgress } = params;
   const settings = await getSettings();
   const isTr = settings.language === 'tr';
-  const targetLang = isTr ? 'Turkish' : 'English';
+  const targetLang =
+    settings.aiLanguage === 'en'
+      ? 'English'
+      : settings.aiLanguage === 'tr'
+        ? 'Turkish'
+        : "same language as the user's request (defaulting to the bookmark titles' language)";
 
   const bookmarks = flattenBookmarks(tree);
   const folders = getAllFolders(tree);
   const totalCount = bookmarks.length;
-
-  console.group('🦦 [Agent Harness] Starting Eve-Style Multi-Step Organization');
-  console.log(`Total bookmarks: ${totalCount}, Total folders: ${folders.length}`);
 
   // -------------------------------------------------------------
   // PHASE 1: TAXONOMY ARCHITECT (Blueprint Generation)
@@ -260,8 +262,6 @@ ${folderOverviewLines.join('\n')}`;
     prompt: architectPrompt,
   });
 
-  console.log('📐 [Agent Harness] Taxonomy Blueprint Generated:', blueprint);
-
   // -------------------------------------------------------------
   // PHASE 2: HYBRID BATCH ROUTER (Local Fast-Path + LLM Chunks)
   // -------------------------------------------------------------
@@ -372,10 +372,6 @@ ${folderOverviewLines.join('\n')}`;
     }
   }
 
-  console.log(
-    `🎯 [Agent Harness] Mode: ${isFullArchiveReorg ? 'Full Archive' : 'Selective Triage'}. Candidates to route: ${candidatesToRoute.length}`
-  );
-
   // Routing destination map: bookmarkId -> { targetFolderId, reason }
   const routedDestinations = new Map<
     string,
@@ -404,10 +400,6 @@ ${folderOverviewLines.join('\n')}`;
       ambiguousBookmarks.push(b);
     }
   }
-
-  console.log(
-    `⚡ [Agent Harness] Fast-Path classified ${routedDestinations.size} bookmarks instantly. Ambiguous remaining: ${ambiguousBookmarks.length}`
-  );
 
   // Step 2B: LLM Chunked Classification for Ambiguous Bookmarks
   if (ambiguousBookmarks.length > 0) {
@@ -631,9 +623,6 @@ ${batchItems}`;
     message: isTr ? 'Plan hazır!' : 'Plan ready!',
     percentage: 100,
   });
-
-  console.log('✅ [Agent Harness] Plan successfully generated and hydrated:', hydratedPlan);
-  console.groupEnd();
 
   return hydratedPlan;
 }
