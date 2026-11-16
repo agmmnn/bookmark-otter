@@ -3,8 +3,11 @@ import { browser } from 'wxt/browser';
 import type {
   BrokenLinkResult,
   DuplicateGroup,
+  DuplicateScanResult,
+  DuplicateScope,
   EmptyFolder,
   FlatBookmark,
+  HttpsVerifyInfo,
   SimilarGroup,
   TrackingCleanItem,
   TrackingCleanOptions,
@@ -14,6 +17,65 @@ import type {
 
 import { flattenBookmarks } from './bookmarks';
 import { addToTrash, addMultipleToTrash } from './trash';
+
+const SEPARATOR_DOMAINS = [
+  'bookmarkseparators.com',
+  'separator.mayastudios.com',
+  'bookmarks-separator.com',
+];
+
+const LOOSE_FOLDER_NAMES = new Set([
+  'Bookmarks Bar',
+  'Other Bookmarks',
+  'Mobile Bookmarks',
+  'Yer İşaretleri Çubuğu',
+  'Diğer Yer İşaretleri',
+  'Mobil Yer İşaretleri',
+  'Root',
+]);
+
+/**
+ * Returns true when a bookmark is a visual folder separator/divider
+ * (e.g. bookmarkseparators.com or line-drawn titles like "──── Vector ────")
+ * rather than an ordinary duplicate bookmark.
+ */
+export function isBookmarkSeparator(bookmark: {
+  title?: string;
+  url?: string;
+  domain?: string;
+}): boolean {
+  const url = (bookmark.url || '').trim();
+  const title = (bookmark.title || '').trim();
+
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+      if (SEPARATOR_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))) {
+        return true;
+      }
+      if (
+        (parsed.protocol === 'data:' || parsed.protocol === 'javascript:') &&
+        (title === '' || /[─━═⎯▬\-_=*~]{2,}/.test(title))
+      ) {
+        return true;
+      }
+    } catch {
+      const domainLower = (bookmark.domain || '').toLowerCase().replace(/^www\./, '');
+      if (SEPARATOR_DOMAINS.some((d) => domainLower === d || domainLower.endsWith(`.${d}`))) {
+        return true;
+      }
+    }
+  }
+
+  if (title.length > 0) {
+    if (/[─━═⎯▬┄┅┈┉╌╍]{2,}/.test(title)) return true;
+    if (/(?:-{4,}|_{4,}|={4,}|~{4,})/.test(title)) return true;
+    if (/^[\s\-_=*~·•|─━═⎯▬┄┅┈┉╌╍]+$/.test(title)) return true;
+  }
+
+  return false;
+}
 
 // Tracking parameters to strip when detecting duplicate bookmarks
 const TRACKING_PARAMS = new Set([
@@ -43,7 +105,7 @@ const TRACKING_PARAMS = new Set([
  * - standardizes protocol (treats http & https as equivalent for duplication)
  * - lowercases hostname and strips www.
  * - removes tracking parameters (utm_*, ref, fbclid)
- * - removes trailing slashes and hash anchors
+ * - removes trailing slashes, while preserving meaningful hash routes (e.g. SPA #inbox/...)
  */
 export function normalizeUrl(rawUrl: string): string {
   try {
@@ -70,10 +132,63 @@ export function normalizeUrl(rawUrl: string): string {
         ? '?' + cleanParams.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')
         : '';
 
-    return `${hostname}${pathname}${queryString}`;
+    const rawHash = parsed.hash || '';
+    const hash = rawHash && rawHash !== '#' && rawHash.toLowerCase() !== '#top' ? rawHash : '';
+
+    return `${hostname}${pathname}${queryString}${hash}`;
   } catch {
     return rawUrl.trim().toLowerCase().replace(/\/$/, '');
   }
+}
+
+/**
+ * Picks the smartest default copy to keep inside a duplicate group:
+ * prefers items with real titles, placed inside organized subfolders, using HTTPS, then newest.
+ */
+export function pickDefaultKeepBookmark(items: FlatBookmark[]): FlatBookmark {
+  if (items.length === 0) {
+    throw new Error('Cannot pick default bookmark from empty array');
+  }
+
+  const scoreItem = (b: FlatBookmark): number => {
+    let score = 0;
+    const trimmedTitle = (b.title || '').trim();
+    const hasRealTitle =
+      trimmedTitle.length > 0 &&
+      trimmedTitle.toLowerCase() !== (b.domain || '').toLowerCase() &&
+      !/^https?:\/\//i.test(trimmedTitle);
+    if (hasRealTitle) score += 100;
+
+    const isRootLoose =
+      LOOSE_FOLDER_NAMES.has(b.path) ||
+      b.parentId === '1' ||
+      b.parentId === '2' ||
+      b.parentId === '3';
+    if (!isRootLoose) score += 60;
+
+    const depth = b.path ? b.path.split(' / ').length : 1;
+    score += Math.min(20, depth * 5);
+
+    if (b.url.startsWith('https://')) score += 10;
+    return score;
+  };
+
+  let best = items[0]!;
+  let bestScore = scoreItem(best);
+
+  for (let i = 1; i < items.length; i++) {
+    const candidate = items[i]!;
+    const candScore = scoreItem(candidate);
+    if (
+      candScore > bestScore ||
+      (candScore === bestScore && (candidate.dateAdded || 0) > (best.dateAdded || 0))
+    ) {
+      best = candidate;
+      bestScore = candScore;
+    }
+  }
+
+  return best;
 }
 
 /**
@@ -89,40 +204,66 @@ function resolveFlatBookmarks(input: BookmarkTreeNode[] | FlatBookmark[]): FlatB
   return flattenBookmarks(input as BookmarkTreeNode[]);
 }
 
-/**
- * Find all duplicate bookmark groups across the entire bookmark tree
- */
-export function findDuplicates(treeOrFlats: BookmarkTreeNode[] | FlatBookmark[]): DuplicateGroup[] {
-  const bookmarks = resolveFlatBookmarks(treeOrFlats);
-  const groupsMap = new Map<string, FlatBookmark[]>();
-
-  for (const b of bookmarks) {
-    if (!b.url || b.url.startsWith('chrome://')) continue;
-    const key = normalizeUrl(b.url);
-    const existing = groupsMap.get(key) || [];
-    existing.push(b);
-    groupsMap.set(key, existing);
-  }
-
-  const duplicateGroups: DuplicateGroup[] = [];
-  for (const [normUrl, items] of groupsMap.entries()) {
+function buildDuplicateGroupsFromMap(
+  groupsMap: Map<string, FlatBookmark[]>,
+  isSeparator = false
+): DuplicateGroup[] {
+  const result: DuplicateGroup[] = [];
+  for (const [groupKey, items] of groupsMap.entries()) {
     if (items.length >= 2) {
       // Sort items by dateAdded descending (newest first)
       items.sort((a, b) => (b.dateAdded || 0) - (a.dateAdded || 0));
       const firstItem = items[0];
       if (!firstItem) continue;
 
-      duplicateGroups.push({
-        normalizedUrl: normUrl,
+      result.push({
+        normalizedUrl: groupKey,
         displayUrl: firstItem.url,
         domain: firstItem.domain,
         items,
+        isSeparator,
       });
     }
   }
+  return result.sort((a, b) => b.items.length - a.items.length);
+}
 
-  // Sort groups by count of duplicates (largest groups first)
-  return duplicateGroups.sort((a, b) => b.items.length - a.items.length);
+/**
+ * Find duplicate bookmark groups AND separate folder separator/divider bookmarks.
+ */
+export function findDuplicatesWithSeparators(
+  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[],
+  options: { scope?: DuplicateScope } = {}
+): DuplicateScanResult {
+  const scope = options.scope ?? 'library';
+  const bookmarks = resolveFlatBookmarks(treeOrFlats);
+  const regularMap = new Map<string, FlatBookmark[]>();
+  const separatorMap = new Map<string, FlatBookmark[]>();
+
+  for (const b of bookmarks) {
+    if (!b.url || b.url.startsWith('chrome://')) continue;
+    const norm = normalizeUrl(b.url);
+    const key = scope === 'folder' ? `${b.parentId || b.path}::${norm}` : norm;
+    const targetMap = isBookmarkSeparator(b) ? separatorMap : regularMap;
+    const existing = targetMap.get(key) || [];
+    existing.push(b);
+    targetMap.set(key, existing);
+  }
+
+  return {
+    duplicates: buildDuplicateGroupsFromMap(regularMap, false),
+    separators: buildDuplicateGroupsFromMap(separatorMap, true),
+  };
+}
+
+/**
+ * Find duplicate bookmark groups (excluding bookmark separators/dividers).
+ */
+export function findDuplicates(
+  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[],
+  options: { scope?: DuplicateScope } = {}
+): DuplicateGroup[] {
+  return findDuplicatesWithSeparators(treeOrFlats, options).duplicates;
 }
 
 /**
@@ -195,7 +336,12 @@ export async function checkUrlDirect(
   url: string,
   timeoutMs = 6000,
   signal?: AbortSignal
-): Promise<{ status: 'healthy' | 'broken' | 'protected'; statusCode?: number; error?: string }> {
+): Promise<{
+  status: 'healthy' | 'broken' | 'protected';
+  statusCode?: number;
+  error?: string;
+  finalUrl?: string;
+}> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -236,21 +382,22 @@ export async function checkUrlDirect(
     clearTimeout(timeoutId);
 
     const code = res.status;
+    const finalUrl = res.url || url;
     if (code >= 200 && code < 400) {
-      return { status: 'healthy', statusCode: code };
+      return { status: 'healthy', statusCode: code, finalUrl };
     }
     if (code === 401 || code === 403) {
       // Protected/Authentication required (e.g. private dashboard, Google Docs) - NOT a dead link!
-      return { status: 'protected', statusCode: code };
+      return { status: 'protected', statusCode: code, finalUrl };
     }
     if (code === 404 || code === 410) {
-      return { status: 'broken', statusCode: code, error: `HTTP ${code} Not Found` };
+      return { status: 'broken', statusCode: code, error: `HTTP ${code} Not Found`, finalUrl };
     }
     if (code >= 500) {
-      return { status: 'broken', statusCode: code, error: `HTTP ${code} Server Error` };
+      return { status: 'broken', statusCode: code, error: `HTTP ${code} Server Error`, finalUrl };
     }
 
-    return { status: 'healthy', statusCode: code };
+    return { status: 'healthy', statusCode: code, finalUrl };
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (signal?.aborted) {
@@ -272,7 +419,12 @@ export async function testUrlHealth(
   url: string,
   timeoutMs = 6000,
   signal?: AbortSignal
-): Promise<{ status: 'healthy' | 'broken' | 'protected'; statusCode?: number; error?: string }> {
+): Promise<{
+  status: 'healthy' | 'broken' | 'protected';
+  statusCode?: number;
+  error?: string;
+  finalUrl?: string;
+}> {
   if (signal?.aborted) {
     throw new DOMException('Aborted', 'AbortError');
   }
@@ -289,6 +441,7 @@ export async function testUrlHealth(
               status: 'healthy' | 'broken' | 'protected';
               statusCode?: number;
               error?: string;
+              finalUrl?: string;
             };
           }
         | { ok: false }
@@ -354,17 +507,22 @@ export async function scanBrokenLinks(
 }
 
 /**
- * Batch resolve duplicate group: keep one (newest or oldest) and trash the others
+ * Batch resolve duplicate group: keep a specific item ID (or newest/oldest) and trash the others
  */
 export async function resolveDuplicateGroup(
   group: DuplicateGroup,
-  keepMode: 'newest' | 'oldest' = 'newest'
+  keepModeOrId: 'newest' | 'oldest' | { keepId: string } = 'newest'
 ): Promise<number> {
   const items = [...group.items];
-  // Sort items
   items.sort((a, b) => (b.dateAdded || 0) - (a.dateAdded || 0));
 
-  const toKeep = keepMode === 'newest' ? items[0] : items[items.length - 1];
+  let toKeep: FlatBookmark | undefined;
+  if (typeof keepModeOrId === 'object' && keepModeOrId.keepId) {
+    toKeep = items.find((b) => b.id === keepModeOrId.keepId);
+  }
+  if (!toKeep) {
+    toKeep = keepModeOrId === 'oldest' ? items[items.length - 1] : pickDefaultKeepBookmark(items);
+  }
   if (!toKeep) return 0;
   const toDelete = items.filter((b) => b.id !== toKeep.id);
 
@@ -480,25 +638,148 @@ export async function removeMultipleBookmarksWithTrash(
   return count;
 }
 
+const IDENTITY_QUERY_KEYS = new Set([
+  'v',
+  'video',
+  'vid',
+  'list',
+  'playlist',
+  'watch',
+  'q',
+  'query',
+  'search',
+  'search_query',
+  'k',
+  'keywords',
+  'field-keywords',
+  'text',
+  'wd',
+  'p',
+  'id',
+  'item',
+  'item_id',
+  'post',
+  'post_id',
+  'page_id',
+  'article',
+  'story',
+  'topic',
+  'thread',
+  'doc',
+  'docid',
+  'document',
+  'slug',
+  'sku',
+  'asin',
+  'pid',
+  'product',
+  'product_id',
+  'channel',
+  'user',
+  'username',
+  'u',
+  'url',
+  'target',
+  'dest',
+  'course',
+  'lesson',
+  'module',
+  'section',
+  'issue',
+  'pr',
+  'commit',
+  'ticket',
+  'code',
+  'i',
+  'cat',
+  'category',
+  'tag',
+  'tab',
+  'name',
+  'type',
+  'file',
+  'path',
+  'page',
+]);
+
+const SPA_HASH_HOSTS = new Set([
+  'mail.google.com',
+  'calendar.google.com',
+  'drive.google.com',
+  'docs.google.com',
+  'keep.google.com',
+  'contacts.google.com',
+  'photos.google.com',
+  'app.slack.com',
+  'discord.com',
+  'figma.com',
+  'notion.so',
+  'trello.com',
+  'linear.app',
+  'airtable.com',
+  'web.whatsapp.com',
+  'web.telegram.org',
+]);
+
+function isSpaRouteHash(hostname: string, hash: string): boolean {
+  if (!hash || hash === '#' || hash.toLowerCase() === '#top') return false;
+  if (SPA_HASH_HOSTS.has(hostname)) return true;
+  if (hash.startsWith('#/') || hash.startsWith('#!') || hash.includes('/') || hash.includes('=')) {
+    return true;
+  }
+  return /^#(inbox|sent|drafts|trash|spam|starred|all|settings|compose|label|category|search)\b/i.test(
+    hash
+  );
+}
+
 /**
- * Find similar bookmarks grouped by their common base URL / origin and path endpoint
+ * Find similar bookmarks grouped by their common canonical base URL
+ * (preserving identity query params such as YouTube watch?v= / Google search?q= and SPA hashes like Gmail #inbox/...).
+ * Bookmarks already belonging to Duplicate groups or visual separators are automatically excluded.
  */
 export function findSimilarBookmarks(
-  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[]
+  treeOrFlats: BookmarkTreeNode[] | FlatBookmark[],
+  excludeDuplicateIds?: Set<string>
 ): SimilarGroup[] {
   const bookmarks = resolveFlatBookmarks(treeOrFlats);
+  const autoExcludeIds =
+    excludeDuplicateIds ??
+    new Set(findDuplicates(bookmarks).flatMap((g) => g.items.map((item) => item.id)));
   const baseMap = new Map<string, FlatBookmark[]>();
 
   for (const b of bookmarks) {
     if (!b.url || b.url.startsWith('chrome://')) continue;
+    if (isBookmarkSeparator(b)) continue;
+    if (autoExcludeIds.has(b.id)) continue;
 
     try {
       const parsed = new URL(b.url);
+      const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
       let pathname = parsed.pathname;
       if (pathname.length > 1 && pathname.endsWith('/')) {
         pathname = pathname.slice(0, -1);
       }
-      const baseUrl = `${parsed.origin}${pathname}`;
+
+      const isTwitterHost = hostname.includes('twitter.') || hostname === 'x.com';
+      const identityParams: [string, string][] = [];
+      parsed.searchParams.forEach((val, key) => {
+        const lowerKey = key.toLowerCase();
+        if (TRACKING_PARAMS.has(lowerKey) || lowerKey.startsWith('utm_')) return;
+        const isIdentity =
+          IDENTITY_QUERY_KEYS.has(lowerKey) || (lowerKey === 's' && !isTwitterHost);
+        if (isIdentity) {
+          identityParams.push([lowerKey, val]);
+        }
+      });
+      identityParams.sort((a, b) => a[0].localeCompare(b[0]));
+
+      const identityQuery =
+        identityParams.length > 0
+          ? '?' + identityParams.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')
+          : '';
+
+      const spaHash = isSpaRouteHash(hostname, parsed.hash) ? parsed.hash : '';
+      const baseUrl = `${parsed.protocol}//${hostname}${pathname}${identityQuery}${spaHash}`;
 
       const existing = baseMap.get(baseUrl) || [];
       existing.push(b);
@@ -511,6 +792,7 @@ export function findSimilarBookmarks(
   const groups: SimilarGroup[] = [];
   for (const [baseUrl, items] of baseMap.entries()) {
     if (items.length >= 2) {
+      items.sort((a, b) => (b.dateAdded || 0) - (a.dateAdded || 0));
       let domain = '';
       try {
         domain = new URL(baseUrl).hostname.replace(/^www\./, '');
@@ -682,6 +964,10 @@ export function findTrackingParameters(
             type: removedParamTypes.get(key),
           });
         }
+      }
+
+      if (parsed.hash) {
+        segments.push({ text: parsed.hash, isRemoved: false });
       }
 
       results.push({
@@ -884,19 +1170,86 @@ export async function restoreBookmarkUrls(
   return count;
 }
 
+function normalizeHostForRedirectCheck(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function isSameSiteDomain(origUrl: string, finalUrl?: string): boolean {
+  if (!finalUrl) return true;
+  const origHost = normalizeHostForRedirectCheck(origUrl);
+  const finalHost = normalizeHostForRedirectCheck(finalUrl);
+  if (!origHost || !finalHost) return true;
+  return (
+    origHost === finalHost ||
+    finalHost.endsWith(`.${origHost}`) ||
+    origHost.endsWith(`.${finalHost}`)
+  );
+}
+
 /**
- * Verifies whether the HTTPS version of each HTTP bookmark responds without error.
+ * Verifies whether the HTTPS version of each HTTP bookmark works on the same domain,
+ * redirects to another domain, is unsupported over HTTPS (HTTP works), or is dead (moves to 404 tab).
  */
 export async function verifyHttpsSupportBatch(
   bookmarks: FlatBookmark[],
-  onProgress?: (checked: number, total: number, id: string, supported: boolean) => void,
+  onProgress?: (checked: number, total: number, id: string, info: HttpsVerifyInfo) => void,
   signal?: AbortSignal,
   concurrency = 8
-): Promise<Map<string, boolean>> {
-  const results = new Map<string, boolean>();
+): Promise<Map<string, HttpsVerifyInfo>> {
+  const results = new Map<string, HttpsVerifyInfo>();
   let index = 0;
   let completed = 0;
   const total = bookmarks.length;
+
+  async function verifySingle(item: FlatBookmark): Promise<HttpsVerifyInfo> {
+    const httpsUrl = item.url.replace(/^http:\/\//i, 'https://');
+    const httpsRes = await testUrlHealth(httpsUrl, 5000, signal);
+
+    if (httpsRes.status === 'healthy' || httpsRes.status === 'protected') {
+      if (httpsRes.finalUrl && !isSameSiteDomain(item.url, httpsRes.finalUrl)) {
+        return {
+          status: 'redirect',
+          finalUrl: httpsRes.finalUrl,
+          redirectDomain: normalizeHostForRedirectCheck(httpsRes.finalUrl),
+          statusCode: httpsRes.statusCode,
+        };
+      }
+      return {
+        status: 'supported',
+        finalUrl: httpsRes.finalUrl,
+        statusCode: httpsRes.statusCode,
+      };
+    }
+
+    // HTTPS failed or returned 4xx/5xx; test original http:// URL to distinguish HTTP-only vs dead link
+    const httpRes = await testUrlHealth(item.url, 4500, signal);
+    if (httpRes.status === 'healthy' || httpRes.status === 'protected') {
+      if (httpRes.finalUrl && !isSameSiteDomain(item.url, httpRes.finalUrl)) {
+        return {
+          status: 'redirect',
+          finalUrl: httpRes.finalUrl,
+          redirectDomain: normalizeHostForRedirectCheck(httpRes.finalUrl),
+          statusCode: httpRes.statusCode,
+        };
+      }
+      return {
+        status: 'unsupported',
+        statusCode: httpsRes.statusCode,
+        error: httpsRes.error,
+      };
+    }
+
+    return {
+      status: 'dead',
+      statusCode: httpRes.statusCode ?? httpsRes.statusCode,
+      error: httpRes.error ?? httpsRes.error,
+      finalUrl: httpRes.finalUrl ?? httpsRes.finalUrl,
+    };
+  }
 
   async function worker() {
     while (index < total) {
@@ -905,18 +1258,17 @@ export async function verifyHttpsSupportBatch(
       const item = bookmarks[currentIndex];
       if (!item) continue;
 
-      const httpsUrl = item.url.replace(/^http:\/\//i, 'https://');
       try {
-        const res = await testUrlHealth(httpsUrl, 5000, signal);
-        const supported = res.status === 'healthy' || res.status === 'protected';
-        results.set(item.id, supported);
+        const info = await verifySingle(item);
+        results.set(item.id, info);
         completed++;
-        onProgress?.(completed, total, item.id, supported);
+        onProgress?.(completed, total, item.id, info);
       } catch {
         if (signal?.aborted) break;
-        results.set(item.id, false);
+        const fallbackInfo: HttpsVerifyInfo = { status: 'unverified' };
+        results.set(item.id, fallbackInfo);
         completed++;
-        onProgress?.(completed, total, item.id, false);
+        onProgress?.(completed, total, item.id, fallbackInfo);
       }
     }
   }

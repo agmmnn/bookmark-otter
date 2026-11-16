@@ -33,7 +33,11 @@ import {
   Share2,
   Check,
   ChevronDown,
+  ChevronRight,
   Radio,
+  MoreHorizontal,
+  GitMerge,
+  FolderInput,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -41,15 +45,23 @@ import { browser } from 'wxt/browser';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
 import { formatFolderTitle, formatShortFolderPath, useResponsiveTabStage } from '@/lib/utils';
-import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
+import { getBookmarkTree, flattenBookmarks, getAllFolders } from '@/services/bookmarks';
 import {
-  findDuplicates,
+  findDuplicatesWithSeparators,
   findEmptyFolders,
   scanBrokenLinks,
   resolveDuplicateGroup,
+  pickDefaultKeepBookmark,
   removeEmptyFolder,
   removeBookmarkWithTrash,
   removeMultipleBookmarksWithTrash,
@@ -68,9 +80,12 @@ import { hasWebScanPermission, requestWebScanPermission } from '@/services/permi
 import { restoreRecentTrashItems } from '@/services/trash';
 import type {
   DuplicateGroup,
+  DuplicateScope,
   EmptyFolder,
   BrokenLinkResult,
   FlatBookmark,
+  FlatFolder,
+  HttpsVerifyInfo,
   SimilarGroup,
   TrackingCleanItem,
   TrackingCleanOptions,
@@ -151,16 +166,37 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     setOpenOverviewSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
+  const [separatorGroups, setSeparatorGroups] = useState<DuplicateGroup[]>([]);
+  const [duplicateScope, setDuplicateScope] = useState<DuplicateScope>('library');
+  const [showSeparatorsSection, setShowSeparatorsSection] = useState(false);
+  const [selectedKeepIds, setSelectedKeepIds] = useState<Record<string, string>>({});
+  const [ignoredDuplicateKeys, setIgnoredDuplicateKeys] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('doctor_ignored_duplicates');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed.filter((x) => typeof x === 'string'));
+      }
+    } catch {}
+    return new Set();
+  });
   const [confirmCleanDuplicates, setConfirmCleanDuplicates] = useState(false);
   const [emptyFolders, setEmptyFolders] = useState<EmptyFolder[]>([]);
   const [confirmCleanEmpty, setConfirmCleanEmpty] = useState(false);
   const [allBookmarks, setAllBookmarks] = useState<FlatBookmark[]>([]);
+  const [allFolders, setAllFolders] = useState<FlatFolder[]>([]);
 
   // Similar bookmarks state
   const [similarGroups, setSimilarGroups] = useState<SimilarGroup[]>([]);
   const [selectedSimilarIds, setSelectedSimilarIds] = useState<Set<string>>(new Set());
   const [isDeletingSimilar, setIsDeletingSimilar] = useState(false);
   const [confirmDeleteSimilar, setConfirmDeleteSimilar] = useState(false);
+  const [similarActionPanel, setSimilarActionPanel] = useState<'merge' | 'move' | null>(null);
+  const [mergeKeepId, setMergeKeepId] = useState<string>('');
+  const [mergeTitle, setMergeTitle] = useState<string>('');
+  const [isMergingSimilar, setIsMergingSimilar] = useState(false);
+  const [moveFolderSearch, setMoveFolderSearch] = useState('');
+  const [isMovingSimilar, setIsMovingSimilar] = useState(false);
 
   // Tracking parameters state
   const [trackingItems, setTrackingItems] = useState<TrackingCleanItem[]>([]);
@@ -183,13 +219,18 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     total: number;
   } | null>(null);
   const [upgradingSingleId, setUpgradingSingleId] = useState<string | null>(null);
-  const [httpsVerifyMap, setHttpsVerifyMap] = useState<Map<string, boolean>>(new Map());
+  const [httpsVerifyMap, setHttpsVerifyMap] = useState<Map<string, HttpsVerifyInfo>>(new Map());
+  const [hasCompletedHttpsVerify, setHasCompletedHttpsVerify] = useState(false);
+  const [deadMovedCount, setDeadMovedCount] = useState(0);
   const [isVerifyingHttps, setIsVerifyingHttps] = useState(false);
   const [verifyHttpsProgress, setVerifyHttpsProgress] = useState<{
     current: number;
     total: number;
+    currentDomain?: string;
   } | null>(null);
   const [httpSearchQuery, setHttpSearchQuery] = useState('');
+  const [groupHttpByDomain, setGroupHttpByDomain] = useState(true);
+  const [collapsedHttpDomains, setCollapsedHttpDomains] = useState<Set<string>>(new Set());
   const [visibleHttpCount, setVisibleHttpCount] = useState(30);
 
   // Broken link scanner & optional host permission state
@@ -220,13 +261,13 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const [deletingBrokenId, setDeletingBrokenId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const showToast = (msg: string, onUndo?: () => Promise<void>) => {
-    if (onUndo) {
+  const showToast = (msg: string, onAction?: () => Promise<void> | void, actionLabel?: string) => {
+    if (onAction) {
       toast.success(msg, {
         action: {
-          label: t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo'),
+          label: actionLabel || t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo'),
           onClick: () => {
-            onUndo();
+            onAction();
           },
         },
       });
@@ -320,16 +361,22 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       const tree = await getBookmarkTree();
       // Flatten ONCE and reuse across all scanners for 5x CPU performance gain
       const flats = flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'));
-      const dups = findDuplicates(flats);
+      const folders = getAllFolders(tree).filter((f) => f.id !== '0');
+      const { duplicates: dups, separators: seps } = findDuplicatesWithSeparators(flats, {
+        scope: duplicateScope,
+      });
+      const dupIds = new Set(dups.flatMap((g) => g.items.map((it) => it.id)));
       const empties = findEmptyFolders(tree);
-      const similar = findSimilarBookmarks(flats);
+      const similar = findSimilarBookmarks(flats, dupIds);
       const trackers = findTrackingParameters(flats, trackingOptions);
       const insecures = findInsecureHttpBookmarks(flats);
       const baseInsights = calculateInsights(tree, cachedBrokenCount);
 
       setDuplicates(dups);
+      setSeparatorGroups(seps);
       setEmptyFolders(empties);
       setAllBookmarks(flats);
+      setAllFolders(folders);
       setSimilarGroups(similar);
       setTrackingItems(trackers);
       setInsecureBookmarks(insecures);
@@ -339,7 +386,23 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     } finally {
       setIsLoading(false);
     }
-  }, [trackingOptions]);
+  }, [trackingOptions, duplicateScope]);
+
+  // Recompute duplicates & similar instantaneously when scope toggles on cached bookmarks
+  const handleDuplicateScopeChange = (nextScope: DuplicateScope) => {
+    if (nextScope === duplicateScope) return;
+    setDuplicateScope(nextScope);
+    setConfirmCleanDuplicates(false);
+    if (allBookmarks.length > 0) {
+      const { duplicates: dups, separators: seps } = findDuplicatesWithSeparators(allBookmarks, {
+        scope: nextScope,
+      });
+      const dupIds = new Set(dups.flatMap((g) => g.items.map((it) => it.id)));
+      setDuplicates(dups);
+      setSeparatorGroups(seps);
+      setSimilarGroups(findSimilarBookmarks(allBookmarks, dupIds));
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -366,15 +429,59 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   }, [loadData]);
 
   // --- Duplicates Actions ---
-  const handleResolveGroup = async (
-    group: DuplicateGroup,
-    keepMode: 'newest' | 'oldest' = 'newest'
-  ) => {
-    const removedCount = await resolveDuplicateGroup(group, keepMode);
+  const activeDuplicates = useMemo(
+    () => duplicates.filter((g) => !ignoredDuplicateKeys.has(g.normalizedUrl)),
+    [duplicates, ignoredDuplicateKeys]
+  );
+
+  const ignoredDuplicateCount = useMemo(
+    () => duplicates.filter((g) => ignoredDuplicateKeys.has(g.normalizedUrl)).length,
+    [duplicates, ignoredDuplicateKeys]
+  );
+
+  const getGroupKeepId = useCallback(
+    (group: DuplicateGroup): string => {
+      const chosen = selectedKeepIds[group.normalizedUrl];
+      if (chosen && group.items.some((it) => it.id === chosen)) {
+        return chosen;
+      }
+      return pickDefaultKeepBookmark(group.items).id;
+    },
+    [selectedKeepIds]
+  );
+
+  const handleSelectKeepId = (groupKey: string, itemId: string) => {
+    setSelectedKeepIds((prev) => ({ ...prev, [groupKey]: itemId }));
+  };
+
+  const handleIgnoreDuplicateGroup = (groupKey: string) => {
+    setIgnoredDuplicateKeys((prev) => {
+      const next = new Set(prev);
+      next.add(groupKey);
+      try {
+        localStorage.setItem('doctor_ignored_duplicates', JSON.stringify(Array.from(next)));
+      } catch {}
+      return next;
+    });
+    showToast(
+      lang === 'tr' ? 'Grup mükerrer listesinden gizlendi' : 'Group ignored from duplicates'
+    );
+  };
+
+  const handleResetIgnoredDuplicates = () => {
+    setIgnoredDuplicateKeys(new Set());
+    try {
+      localStorage.removeItem('doctor_ignored_duplicates');
+    } catch {}
+  };
+
+  const handleResolveGroup = async (group: DuplicateGroup, keepId?: string) => {
+    const resolvedKeepId = keepId || getGroupKeepId(group);
+    const removedCount = await resolveDuplicateGroup(group, { keepId: resolvedKeepId });
     setDuplicates((prev) => prev.filter((g) => g.normalizedUrl !== group.normalizedUrl));
     showToast(
       t('duplicatesCleanedMsg', { count: removedCount }) ||
-        `Removed ${removedCount} duplicate(s) (kept ${keepMode}). Moved to Recycle Bin.`,
+        `Removed ${removedCount} duplicate(s). Moved to Recycle Bin.`,
       async () => {
         await restoreRecentTrashItems(removedCount);
         await loadData();
@@ -384,34 +491,47 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     if (onFixed) onFixed();
   };
 
-  const handleRemoveSingleDuplicate = async (group: DuplicateGroup, item: FlatBookmark) => {
-    await removeBookmarkWithTrash(item);
+  const handleRemoveDuplicateItems = async (
+    group: DuplicateGroup,
+    itemsToDelete: FlatBookmark[]
+  ) => {
+    if (itemsToDelete.length === 0) return;
+    const count = await removeMultipleBookmarksWithTrash(itemsToDelete);
+    const deleteIds = new Set(itemsToDelete.map((it) => it.id));
     setDuplicates((prev) =>
       prev
         .map((g) => {
           if (g.normalizedUrl === group.normalizedUrl) {
-            const remaining = g.items.filter((it) => it.id !== item.id);
+            const remaining = g.items.filter((it) => !deleteIds.has(it.id));
             return { ...g, items: remaining };
           }
           return g;
         })
         .filter((g) => g.items.length > 1)
     );
-    showToast(t('brokenLinkRemoved') || 'Removed duplicate to Recycle Bin', async () => {
-      await restoreRecentTrashItems(1);
-      await loadData();
-      onFixed?.();
-    });
+    showToast(
+      lang === 'tr'
+        ? `${count} kopya Çöp Kutusuna taşındı`
+        : `Moved ${count} copy(ies) to Recycle Bin`,
+      async () => {
+        await restoreRecentTrashItems(count);
+        await loadData();
+        onFixed?.();
+      }
+    );
     if (onFixed) onFixed();
   };
 
   const handleCleanAllDuplicates = async () => {
     let totalRemoved = 0;
-    for (const group of duplicates) {
-      const count = await resolveDuplicateGroup(group, 'newest');
+    const resolvedKeys = new Set<string>();
+    for (const group of activeDuplicates) {
+      const keepId = getGroupKeepId(group);
+      const count = await resolveDuplicateGroup(group, { keepId });
       totalRemoved += count;
+      resolvedKeys.add(group.normalizedUrl);
     }
-    setDuplicates([]);
+    setDuplicates((prev) => prev.filter((g) => !resolvedKeys.has(g.normalizedUrl)));
     setConfirmCleanDuplicates(false);
     showToast(
       t('allDuplicatesCleaned', { count: totalRemoved }) ||
@@ -431,6 +551,10 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      if (next.size === 0) {
+        setSimilarActionPanel(null);
+        setConfirmDeleteSimilar(false);
+      }
       return next;
     });
   };
@@ -446,6 +570,34 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           next.add(it.id);
         }
       }
+      if (next.size === 0) {
+        setSimilarActionPanel(null);
+        setConfirmDeleteSimilar(false);
+      }
+      return next;
+    });
+  };
+
+  const selectExceptNewestInGroup = (group: SimilarGroup) => {
+    if (group.items.length < 2) return;
+    const sorted = [...group.items].sort((a, b) => (b.dateAdded || 0) - (a.dateAdded || 0));
+    const newestId = sorted[0]!.id;
+    const otherIds = group.items.filter((it) => it.id !== newestId).map((it) => it.id);
+    const allOthersSelected =
+      !selectedSimilarIds.has(newestId) && otherIds.every((id) => selectedSimilarIds.has(id));
+
+    setSelectedSimilarIds((prev) => {
+      const next = new Set(prev);
+      if (allOthersSelected) {
+        for (const id of otherIds) next.delete(id);
+      } else {
+        next.delete(newestId);
+        for (const id of otherIds) next.add(id);
+      }
+      if (next.size === 0) {
+        setSimilarActionPanel(null);
+        setConfirmDeleteSimilar(false);
+      }
       return next;
     });
   };
@@ -455,6 +607,11 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     [similarGroups]
   );
 
+  const selectedSimilarItems = useMemo(
+    () => similarGroups.flatMap((g) => g.items).filter((it) => selectedSimilarIds.has(it.id)),
+    [similarGroups, selectedSimilarIds]
+  );
+
   const isAllSimilarSelected =
     allSimilarBookmarkIds.length > 0 &&
     allSimilarBookmarkIds.every((id) => selectedSimilarIds.has(id));
@@ -462,33 +619,27 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const toggleSelectAllSimilar = () => {
     if (isAllSimilarSelected) {
       setSelectedSimilarIds(new Set());
+      setSimilarActionPanel(null);
+      setConfirmDeleteSimilar(false);
     } else {
       setSelectedSimilarIds(new Set(allSimilarBookmarkIds));
     }
   };
 
   const handleOpenSelectedSimilar = () => {
-    const selectedBookmarks = similarGroups
-      .flatMap((g) => g.items)
-      .filter((it) => selectedSimilarIds.has(it.id));
-
-    for (const b of selectedBookmarks) {
+    for (const b of selectedSimilarItems) {
       if (b.url) {
         browser.tabs.create({ url: b.url, active: false });
       }
     }
-    showToast(t('openInTabs') || `Opened ${selectedBookmarks.length} tabs`);
+    showToast(t('openInTabs') || `Opened ${selectedSimilarItems.length} tabs`);
   };
 
   const handleDeleteSelectedSimilar = async () => {
     if (selectedSimilarIds.size === 0 || isDeletingSimilar) return;
     setIsDeletingSimilar(true);
     try {
-      const selectedItems = similarGroups
-        .flatMap((g) => g.items)
-        .filter((it) => selectedSimilarIds.has(it.id));
-
-      const count = await removeMultipleBookmarksWithTrash(selectedItems);
+      const count = await removeMultipleBookmarksWithTrash(selectedSimilarItems);
       setSimilarGroups((prev) =>
         prev
           .map((g) => ({
@@ -499,6 +650,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       );
       setSelectedSimilarIds(new Set());
       setConfirmDeleteSimilar(false);
+      setSimilarActionPanel(null);
       showToast(
         t('brokenLinkRemoved') || `Moved ${count} bookmark(s) to Recycle Bin.`,
         async () => {
@@ -514,6 +666,108 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       setIsDeletingSimilar(false);
     }
   };
+
+  const handleOpenMergeSimilar = () => {
+    if (selectedSimilarItems.length < 2) return;
+    if (similarActionPanel === 'merge') {
+      setSimilarActionPanel(null);
+      return;
+    }
+    const defaultKeep = pickDefaultKeepBookmark(selectedSimilarItems);
+    setMergeKeepId(defaultKeep.id);
+    setMergeTitle(defaultKeep.title || defaultKeep.domain);
+    setConfirmDeleteSimilar(false);
+    setSimilarActionPanel('merge');
+  };
+
+  const handleConfirmMergeSimilar = async () => {
+    if (selectedSimilarItems.length < 2 || isMergingSimilar) return;
+    const keeper =
+      selectedSimilarItems.find((it) => it.id === mergeKeepId) || selectedSimilarItems[0];
+    if (!keeper) return;
+
+    const toTrash = selectedSimilarItems.filter((it) => it.id !== keeper.id);
+    const trimmedTitle = mergeTitle.trim();
+    const prevKeeperTitle = keeper.title;
+
+    setIsMergingSimilar(true);
+    try {
+      if (trimmedTitle && trimmedTitle !== keeper.title) {
+        await browser.bookmarks.update(keeper.id, { title: trimmedTitle });
+      }
+      const trashedCount = await removeMultipleBookmarksWithTrash(toTrash);
+      setSelectedSimilarIds(new Set());
+      setSimilarActionPanel(null);
+      await loadData();
+      showToast(
+        lang === 'tr'
+          ? `1 yer imi korundu, ${trashedCount} benzer kopya Çöp Kutusuna taşındı`
+          : `Merged: kept 1 bookmark, moved ${trashedCount} to Recycle Bin`,
+        async () => {
+          if (trimmedTitle && trimmedTitle !== prevKeeperTitle) {
+            await browser.bookmarks.update(keeper.id, { title: prevKeeperTitle });
+          }
+          await restoreRecentTrashItems(trashedCount);
+          await loadData();
+          onFixed?.();
+        }
+      );
+      if (onFixed) onFixed();
+    } catch (err) {
+      console.error('Failed to merge similar bookmarks:', err);
+    } finally {
+      setIsMergingSimilar(false);
+    }
+  };
+
+  const handleMoveSelectedSimilar = async (targetFolderId: string, targetFolderTitle: string) => {
+    if (selectedSimilarItems.length === 0 || isMovingSimilar) return;
+    const previousParents = selectedSimilarItems.map((it) => ({
+      id: it.id,
+      parentId: it.parentId,
+    }));
+    setIsMovingSimilar(true);
+    try {
+      let moved = 0;
+      for (const item of selectedSimilarItems) {
+        if (item.parentId !== targetFolderId) {
+          await browser.bookmarks.move(item.id, { parentId: targetFolderId });
+          moved++;
+        }
+      }
+      setSelectedSimilarIds(new Set());
+      setSimilarActionPanel(null);
+      setMoveFolderSearch('');
+      await loadData();
+      showToast(
+        lang === 'tr'
+          ? `${moved} yer imi "${targetFolderTitle}" klasörüne taşındı`
+          : `Moved ${moved} bookmark(s) to "${targetFolderTitle}"`,
+        async () => {
+          for (const prev of previousParents) {
+            if (prev.parentId) {
+              await browser.bookmarks.move(prev.id, { parentId: prev.parentId });
+            }
+          }
+          await loadData();
+          onFixed?.();
+        }
+      );
+      if (onFixed) onFixed();
+    } catch (err) {
+      console.error('Failed to move selected similar bookmarks:', err);
+    } finally {
+      setIsMovingSimilar(false);
+    }
+  };
+
+  const filteredMoveFolders = useMemo(() => {
+    const q = moveFolderSearch.trim().toLowerCase();
+    if (!q) return allFolders;
+    return allFolders.filter(
+      (f) => f.title.toLowerCase().includes(q) || f.path.toLowerCase().includes(q)
+    );
+  }, [allFolders, moveFolderSearch]);
 
   const handleDeleteSingleSimilar = async (item: FlatBookmark) => {
     await removeBookmarkWithTrash(item);
@@ -629,17 +883,67 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   };
 
   // --- Insecure HTTP Actions ---
+  const getHttpStatusRank = useCallback(
+    (id: string): number => {
+      const info = httpsVerifyMap.get(id);
+      switch (info?.status) {
+        case 'supported':
+          return 0;
+        case 'redirect':
+          return 1;
+        case 'unsupported':
+          return 3;
+        default:
+          return 2; // unverified
+      }
+    },
+    [httpsVerifyMap]
+  );
+
   const filteredInsecureBookmarks = useMemo(() => {
     const q = httpSearchQuery.trim().toLowerCase();
-    if (!q) return insecureBookmarks;
-    return insecureBookmarks.filter(
-      (b) =>
-        b.title.toLowerCase().includes(q) ||
-        b.url.toLowerCase().includes(q) ||
-        b.domain.toLowerCase().includes(q) ||
-        b.path.toLowerCase().includes(q)
-    );
-  }, [insecureBookmarks, httpSearchQuery]);
+    const list = q
+      ? insecureBookmarks.filter(
+          (b) =>
+            b.title.toLowerCase().includes(q) ||
+            b.url.toLowerCase().includes(q) ||
+            b.domain.toLowerCase().includes(q) ||
+            b.path.toLowerCase().includes(q)
+        )
+      : insecureBookmarks;
+
+    return [...list].sort((a, b) => {
+      const rankDiff = getHttpStatusRank(a.id) - getHttpStatusRank(b.id);
+      if (rankDiff !== 0) return rankDiff;
+      const domDiff = (a.domain || '').localeCompare(b.domain || '');
+      if (domDiff !== 0) return domDiff;
+      return (a.title || a.url).localeCompare(b.title || b.url);
+    });
+  }, [insecureBookmarks, httpSearchQuery, getHttpStatusRank]);
+
+  const groupedInsecureDomains = useMemo(() => {
+    const map = new Map<string, FlatBookmark[]>();
+    for (const b of filteredInsecureBookmarks) {
+      const key = (b.domain || 'other').toLowerCase();
+      const existing = map.get(key) || [];
+      existing.push(b);
+      map.set(key, existing);
+    }
+
+    return Array.from(map.entries())
+      .map(([domain, items]) => {
+        const minRank = Math.min(...items.map((it) => getHttpStatusRank(it.id)));
+        const supportedCount = items.filter(
+          (it) => httpsVerifyMap.get(it.id)?.status === 'supported'
+        ).length;
+        return { domain, items, minRank, supportedCount };
+      })
+      .sort((a, b) => {
+        if (a.minRank !== b.minRank) return a.minRank - b.minRank;
+        if (b.supportedCount !== a.supportedCount) return b.supportedCount - a.supportedCount;
+        return a.domain.localeCompare(b.domain);
+      });
+  }, [filteredInsecureBookmarks, getHttpStatusRank, httpsVerifyMap]);
 
   const visibleInsecureBookmarks = useMemo(
     () => filteredInsecureBookmarks.slice(0, visibleHttpCount),
@@ -647,25 +951,88 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   );
 
   const verifiedHttpItems = useMemo(
-    () => insecureBookmarks.filter((b) => httpsVerifyMap.get(b.id) === true),
+    () => insecureBookmarks.filter((b) => httpsVerifyMap.get(b.id)?.status === 'supported'),
     [insecureBookmarks, httpsVerifyMap]
   );
 
   const handleVerifyHttpsSupport = async () => {
     if (insecureBookmarks.length === 0 || isVerifyingHttps) return;
+    const targets = [...insecureBookmarks];
+    const targetById = new Map(targets.map((b) => [b.id, b]));
     setIsVerifyingHttps(true);
-    setVerifyHttpsProgress({ current: 0, total: insecureBookmarks.length });
+    setHasCompletedHttpsVerify(false);
+    setDeadMovedCount(0);
+    setHttpsVerifyMap(new Map());
+    setVerifyHttpsProgress({ current: 0, total: targets.length });
+
     try {
-      const map = await verifyHttpsSupportBatch(insecureBookmarks, (checked, total) => {
-        setVerifyHttpsProgress({ current: checked, total });
+      const map = await verifyHttpsSupportBatch(targets, (checked, total, id, info) => {
+        const currentItem = targetById.get(id);
+        setVerifyHttpsProgress({
+          current: checked,
+          total,
+          currentDomain: currentItem?.domain || '',
+        });
+        setHttpsVerifyMap((prev) => {
+          const next = new Map(prev);
+          next.set(id, info);
+          return next;
+        });
       });
+
       setHttpsVerifyMap(map);
-      const okCount = Array.from(map.values()).filter(Boolean).length;
-      showToast(
-        lang === 'tr'
-          ? `${okCount} / ${insecureBookmarks.length} sitede HTTPS desteği doğrulandı.`
-          : `Verified HTTPS support on ${okCount} of ${insecureBookmarks.length} sites.`
-      );
+      setHasCompletedHttpsVerify(true);
+
+      // Route dead sites found during HTTPS check directly to the 404 Broken Links tab
+      const deadBrokenEntries: BrokenLinkResult[] = [];
+      const deadIds = new Set<string>();
+      for (const item of targets) {
+        const info = map.get(item.id);
+        if (info?.status === 'dead') {
+          deadIds.add(item.id);
+          deadBrokenEntries.push({
+            bookmark: item,
+            status: 'broken',
+            statusCode: info.statusCode,
+            error: info.error,
+            finalUrl: info.finalUrl,
+            checkedAt: Date.now(),
+          });
+        }
+      }
+
+      if (deadBrokenEntries.length > 0) {
+        setBrokenLinks((prev) => {
+          const existingIds = new Set(prev.map((p) => p.bookmark.id));
+          const merged = [...prev];
+          for (const entry of deadBrokenEntries) {
+            if (!existingIds.has(entry.bookmark.id)) {
+              merged.push(entry);
+            }
+          }
+          return merged;
+        });
+        setHasScannedBroken(true);
+        setInsecureBookmarks((prev) => prev.filter((b) => !deadIds.has(b.id)));
+        setDeadMovedCount(deadBrokenEntries.length);
+      }
+
+      const okCount = Array.from(map.values()).filter((v) => v.status === 'supported').length;
+      if (deadBrokenEntries.length > 0) {
+        showToast(
+          lang === 'tr'
+            ? `${okCount} sitede HTTPS çalışıyor. ${deadBrokenEntries.length} ölü site 404 sekmesine yönlendirildi.`
+            : `${okCount} sites support HTTPS. ${deadBrokenEntries.length} dead site(s) routed to 404 tab.`,
+          () => handleSubTabChange('broken'),
+          lang === 'tr' ? "404'e Git" : 'View 404'
+        );
+      } else {
+        showToast(
+          lang === 'tr'
+            ? `${okCount} / ${targets.length} sitede HTTPS desteği doğrulandı.`
+            : `Verified HTTPS support on ${okCount} of ${targets.length} sites.`
+        );
+      }
     } catch (err) {
       console.error('Failed to verify HTTPS support:', err);
     } finally {
@@ -699,24 +1066,16 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   };
 
   const handleUpgradeAllHttps = async () => {
-    if (insecureBookmarks.length === 0 || isUpgradingHttps || isVerifyingHttps) return;
-
-    let currentMap = httpsVerifyMap;
-    if (currentMap.size === 0) {
-      setIsVerifyingHttps(true);
-      setVerifyHttpsProgress({ current: 0, total: insecureBookmarks.length });
-      try {
-        currentMap = await verifyHttpsSupportBatch(insecureBookmarks, (checked, total) => {
-          setVerifyHttpsProgress({ current: checked, total });
-        });
-        setHttpsVerifyMap(currentMap);
-      } finally {
-        setIsVerifyingHttps(false);
-        setVerifyHttpsProgress(null);
-      }
+    if (
+      insecureBookmarks.length === 0 ||
+      isUpgradingHttps ||
+      isVerifyingHttps ||
+      !hasCompletedHttpsVerify
+    ) {
+      return;
     }
 
-    const targets = insecureBookmarks.filter((b) => currentMap.get(b.id) === true);
+    const targets = verifiedHttpItems;
     if (targets.length === 0) {
       showToast(
         lang === 'tr'
@@ -771,6 +1130,15 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     if (onFixed) onFixed();
   };
 
+  const toggleHttpDomainCollapsed = (domain: string) => {
+    setCollapsedHttpDomains((prev) => {
+      const next = new Set(prev);
+      if (next.has(domain)) next.delete(domain);
+      else next.add(domain);
+      return next;
+    });
+  };
+
   const handleVerifyHttpsClick = () => {
     if (hasScanPermission) {
       handleVerifyHttpsSupport();
@@ -789,20 +1157,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   };
 
   const handleUpgradeAllHttpsClick = () => {
-    if (hasScanPermission) {
-      handleUpgradeAllHttps();
-      return;
-    }
-    // Call requestWebScanPermission synchronously inside click handler (no prior await)
-    requestWebScanPermission()
-      .then((granted) => {
-        setHasScanPermission(granted);
-        setScanPermissionDenied(!granted);
-        if (granted) {
-          handleUpgradeAllHttps();
-        }
-      })
-      .catch(() => setScanPermissionDenied(true));
+    if (!hasCompletedHttpsVerify || verifiedHttpItems.length === 0) return;
+    handleUpgradeAllHttps();
   };
 
   const handleScanLinksClick = () => {
@@ -968,9 +1324,14 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     if (onFixed) onFixed();
   };
 
-  const totalDuplicateBookmarks = duplicates.reduce((acc, g) => acc + (g.items.length - 1), 0);
+  const totalDuplicateBookmarks = activeDuplicates.reduce(
+    (acc, g) => acc + (g.items.length - 1),
+    0
+  );
 
   const hasEverScanned404 = hasScannedBroken || lastScannedAt !== null;
+
+  const activeBrokenTotalCount = Math.max(0, brokenLinks.length - dismissedBrokenIds.size);
 
   const effectiveBrokenCount = useMemo(() => {
     if (hasScannedBroken) return confirmedBrokenLinks.length;
@@ -1134,6 +1495,250 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
   const isSubTabLabelVisible = (tabKey: NormalizedDoctorSubTab) =>
     subTabStage === 'wide' || (subTabStage === 'medium' && subTab === tabKey);
+
+  const clusterDuplicateItems = (group: DuplicateGroup) => {
+    const map = new Map<
+      string,
+      { key: string; primaryItem: FlatBookmark; items: FlatBookmark[]; count: number }
+    >();
+    for (const item of group.items) {
+      const dateStr = formatItemDate(item.dateAdded);
+      const key = `${(item.title || '').trim()}||${item.path}||${dateStr}||${item.url}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.items.push(item);
+        existing.count++;
+      } else {
+        map.set(key, { key, primaryItem: item, items: [item], count: 1 });
+      }
+    }
+    return Array.from(map.values());
+  };
+
+  const getDuplicateUrlDiffBadge = (itemUrl: string, groupDisplayUrl: string): string | null => {
+    if (itemUrl === groupDisplayUrl) return null;
+    try {
+      const a = new URL(itemUrl);
+      const b = new URL(groupDisplayUrl);
+      const diffs: string[] = [];
+      if (a.protocol !== b.protocol) {
+        diffs.push(a.protocol.replace(':', ''));
+      }
+      if (a.hostname !== b.hostname) {
+        diffs.push(a.hostname);
+      }
+      if (a.search !== b.search) {
+        diffs.push(a.search || '(no query)');
+      }
+      if (a.hash !== b.hash) {
+        diffs.push(a.hash || '(no hash)');
+      }
+      if (diffs.length > 0) return diffs.join(' ');
+    } catch {}
+    return itemUrl;
+  };
+
+  const splitUrlDiff = (url: string, allUrls: string[]): { prefix: string; diff: string } => {
+    if (allUrls.length < 2) return { prefix: '', diff: url };
+    let commonLen = url.length;
+    for (const other of allUrls) {
+      let i = 0;
+      const limit = Math.min(commonLen, other.length);
+      while (i < limit && url[i] === other[i]) i++;
+      commonLen = Math.min(commonLen, i);
+    }
+    // Snap back slightly to nearest delimiter so differing key/param or fragment stands out cleanly
+    let snapIdx = commonLen;
+    while (snapIdx > 0 && !['?', '&', '#', '/', '='].includes(url[snapIdx - 1]!)) {
+      snapIdx--;
+    }
+    if (snapIdx === 0) snapIdx = commonLen;
+
+    const rawPrefix = url.slice(0, snapIdx);
+    const diff = url.slice(snapIdx);
+    let compactPrefix = rawPrefix;
+    if (rawPrefix.length > 36) {
+      try {
+        const parsed = new URL(url);
+        const tailLen = 16;
+        compactPrefix = `${parsed.hostname}/…${rawPrefix.slice(-tailLen)}`;
+      } catch {
+        compactPrefix = `…${rawPrefix.slice(-26)}`;
+      }
+    }
+    return { prefix: compactPrefix, diff };
+  };
+
+  const renderHttpRowCard = (item: FlatBookmark, insideDomainGroup = false) => {
+    const isUpgradingThis = upgradingSingleId === item.id;
+    const verifyInfo = httpsVerifyMap.get(item.id);
+    const verifyStatus = verifyInfo?.status ?? 'unverified';
+    let displayDomainPath = item.domain;
+    try {
+      const parsed = new URL(item.url);
+      const shortPath = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '';
+      displayDomainPath = `${item.domain}${shortPath}`;
+    } catch {}
+
+    return (
+      <div
+        key={item.id}
+        className={`group transition-[border-color,background-color] duration-120 ${
+          insideDomainGroup
+            ? 'hover:bg-muted/30 px-3 py-2'
+            : 'border-border/50 bg-card hover:border-border rounded-lg border px-3 py-2 shadow-2xs'
+        }`}
+      >
+        {/* Line 1: Favicon + Single-line Ellipsis Title + Status Action & Overflow Menu */}
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {!insideDomainGroup && (
+              <img
+                src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=32`}
+                alt=""
+                className="size-3.5 shrink-0 rounded-xs"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
+            )}
+            <span
+              className="text-foreground min-w-0 flex-1 truncate text-xs font-semibold"
+              title={item.title || item.url}
+            >
+              {item.title || item.domain}
+            </span>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            {verifyStatus === 'supported' && (
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={isUpgradingThis || isUpgradingHttps}
+                onClick={() => handleUpgradeSingleHttps(item)}
+                className="h-6 cursor-pointer gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 text-[10px] font-medium text-emerald-700 hover:bg-emerald-500/20 active:scale-[0.97] dark:text-emerald-300"
+                title={lang === 'tr' ? "HTTPS'e yükselt" : 'Upgrade to HTTPS'}
+              >
+                {isUpgradingThis ? (
+                  <Loader2 className="size-2.5 animate-spin" />
+                ) : (
+                  <Lock className="size-2.5" />
+                )}
+                <span>{t('upgradeSingleBtn') || 'Upgrade'}</span>
+              </Button>
+            )}
+
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className="text-muted-foreground hover:text-foreground hover:bg-muted/60 flex size-6 cursor-pointer items-center justify-center rounded transition-colors"
+                aria-label={lang === 'tr' ? 'İşlemler' : 'Actions'}
+                title={lang === 'tr' ? 'Diğer işlemler' : 'More actions'}
+              >
+                <MoreHorizontal className="size-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-auto min-w-40 text-xs">
+                {verifyStatus !== 'supported' && (
+                  <DropdownMenuItem
+                    disabled={isUpgradingThis || isUpgradingHttps}
+                    onClick={() => handleUpgradeSingleHttps(item)}
+                    className="cursor-pointer text-xs"
+                  >
+                    <Lock className="size-3.5 text-amber-500" />
+                    <span>{lang === 'tr' ? "Yine de HTTPS'e Yükselt" : 'Force Upgrade HTTPS'}</span>
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (browser.tabs?.create) {
+                      browser.tabs.create({ url: item.url, active: true });
+                    } else {
+                      window.open(item.url, '_blank', 'noreferrer');
+                    }
+                  }}
+                  className="cursor-pointer text-xs"
+                >
+                  <ExternalLink className="size-3.5" />
+                  <span>{lang === 'tr' ? 'Yeni sekmede aç' : 'Open in new tab'}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleDismissInsecure(item.id)}
+                  className="cursor-pointer text-xs"
+                >
+                  <EyeOff className="size-3.5" />
+                  <span>{lang === 'tr' ? 'Yoksay' : 'Ignore'}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => handleRemoveInsecure(item)}
+                  className="cursor-pointer text-xs"
+                >
+                  <Trash2 className="size-3.5" />
+                  <span>{lang === 'tr' ? 'Çöp Kutusuna Taşı' : 'Delete (Trash)'}</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+        {/* Line 2: Compact Domain + Status Badge + Folder */}
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px]">
+          <span className="text-muted-foreground min-w-0 truncate font-mono" title={item.url}>
+            {displayDomainPath}
+          </span>
+
+          {verifyStatus === 'supported' && (
+            <Badge
+              variant="outline"
+              className="h-4 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[8.5px] font-medium text-emerald-700 dark:text-emerald-300"
+            >
+              {lang === 'tr' ? 'HTTPS çalışıyor ✓' : 'HTTPS works ✓'}
+            </Badge>
+          )}
+          {verifyStatus === 'unsupported' && (
+            <Badge
+              variant="outline"
+              className="h-4 shrink-0 border-rose-500/30 bg-rose-500/10 px-1.5 py-0 text-[8.5px] font-medium text-rose-600 dark:text-rose-400"
+            >
+              {lang === 'tr' ? 'Desteklemiyor ✗' : 'Not supported ✗'}
+            </Badge>
+          )}
+          {verifyStatus === 'redirect' && (
+            <Badge
+              variant="outline"
+              className="h-4 shrink-0 border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[8.5px] font-medium text-amber-700 dark:text-amber-300"
+              title={
+                verifyInfo?.redirectDomain
+                  ? `${lang === 'tr' ? 'Yönlendirilen:' : 'Redirects to:'} ${verifyInfo.redirectDomain}`
+                  : verifyInfo?.finalUrl
+              }
+            >
+              {lang === 'tr' ? 'Başka domaine yönlendiriyor ⚠' : 'Redirects domain ⚠'}
+            </Badge>
+          )}
+          {verifyStatus === 'unverified' && (
+            <Badge
+              variant="outline"
+              className="text-muted-foreground border-border/60 h-4 shrink-0 px-1.5 py-0 text-[8.5px]"
+            >
+              {lang === 'tr' ? 'Doğrulanmadı' : 'Unverified'}
+            </Badge>
+          )}
+
+          {item.path && (
+            <Badge
+              variant="outline"
+              className="text-muted-foreground border-border/50 ml-auto h-4 max-w-[115px] shrink-0 truncate px-1.5 py-0 text-[8.5px]"
+              title={item.path}
+            >
+              📁 {formatShortFolderPath(item.path, lang)}
+            </Badge>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
@@ -1367,12 +1972,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           >
             {t('tabBroken') || '404'}
           </span>
-          {effectiveBrokenCount > 0 && (
+          {(effectiveBrokenCount > 0 || (hasScannedBroken && activeBrokenTotalCount > 0)) && (
             <Badge
               variant="destructive"
               className="ml-1 h-3.5 shrink-0 px-1 py-0 text-[8.5px] font-semibold"
             >
-              {effectiveBrokenCount}
+              {effectiveBrokenCount > 0 ? effectiveBrokenCount : activeBrokenTotalCount}
             </Badge>
           )}
         </button>
@@ -2239,59 +2844,124 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       {/* ===================== TAB 1: DUPLICATES ===================== */}
       {visitedSubTabs.has('duplicates') && (
         <div className={subTab === 'duplicates' ? 'space-y-3' : 'hidden'}>
-          {duplicates.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+          {/* Header & Scope Selector */}
+          <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs">
                 <span className="font-semibold text-amber-700 dark:text-amber-300">
                   {totalDuplicateBookmarks}{' '}
                   {t('duplicateItemsFound') || 'duplicate bookmarks found'}
                 </span>
-                <p className="mt-0.5 text-[11px] text-amber-600/80 dark:text-amber-400/80">
-                  {t('duplicateDesc') ||
-                    'Clean redundant copies while preserving the newest saved item.'}
+                <p className="mt-0.5 text-[11px] text-amber-600/85 dark:text-amber-400/85">
+                  {lang === 'tr'
+                    ? 'Her grupta tutulacak kopyayı seçin; fazlalıklar Çöp Kutusuna gider.'
+                    : 'Choose which copy to keep per group; extra copies move to Trash.'}
                 </p>
               </div>
 
-              {confirmCleanDuplicates ? (
-                <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={handleCleanAllDuplicates}
-                    className="h-7 px-2.5 text-xs font-medium active:scale-[0.97]"
-                  >
-                    {lang === 'tr'
-                      ? `Onayla (${totalDuplicateBookmarks} sil)`
-                      : `Confirm (${totalDuplicateBookmarks})`}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setConfirmCleanDuplicates(false)}
-                    className="h-7 px-2 text-xs"
-                  >
-                    {t('cancelBtn') || 'Cancel'}
-                  </Button>
+              {activeDuplicates.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  {confirmCleanDuplicates ? (
+                    <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={handleCleanAllDuplicates}
+                        className="h-7 px-2.5 text-xs font-medium active:scale-[0.97]"
+                      >
+                        {lang === 'tr'
+                          ? `Onayla (${totalDuplicateBookmarks} sil)`
+                          : `Confirm (${totalDuplicateBookmarks})`}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setConfirmCleanDuplicates(false)}
+                        className="h-7 px-2 text-xs"
+                      >
+                        {t('cancelBtn') || 'Cancel'}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setConfirmCleanDuplicates(true)}
+                      className="h-7 cursor-pointer border-amber-500/40 text-xs font-medium text-amber-700 hover:bg-amber-500/20 active:scale-[0.97] dark:text-amber-300"
+                    >
+                      <Sparkles className="mr-1 size-3" />
+                      {lang === 'tr'
+                        ? `Tümünü Temizle (${totalDuplicateBookmarks})`
+                        : `Clean All (${totalDuplicateBookmarks})`}
+                    </Button>
+                  )}
                 </div>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConfirmCleanDuplicates(true)}
-                  className="h-7 border-amber-500/40 text-xs font-medium text-amber-700 hover:bg-amber-500/20 active:scale-[0.97] dark:text-amber-300"
-                >
-                  <Sparkles className="mr-1 size-3" />
-                  {t('cleanAllDuplicatesBtn') || 'Clean All (Keep Newest)'}
-                </Button>
               )}
             </div>
-          )}
+
+            {/* Clean All Impact Preview */}
+            {confirmCleanDuplicates && activeDuplicates.length > 0 && (
+              <div className="bg-background/70 flex flex-wrap items-center gap-1.5 rounded-md border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span>
+                  {lang === 'tr'
+                    ? `${totalDuplicateBookmarks} silinecek, ${activeDuplicates.length} kalacak, Çöp Kutusuna gider`
+                    : `${totalDuplicateBookmarks} will be deleted, ${activeDuplicates.length} will be kept, moved to Trash`}
+                </span>
+                {separatorGroups.length > 0 && (
+                  <span className="text-muted-foreground text-[10px]">
+                    • {lang === 'tr' ? 'Ayırıcılar hariç' : 'Separators excluded'}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Scope Toggle + Ignored Reset */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-500/15 pt-2">
+              <div className="bg-background/60 border-border/50 inline-flex items-center rounded-md border p-0.5 text-[10.5px]">
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateScopeChange('library')}
+                  className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                    duplicateScope === 'library'
+                      ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {lang === 'tr' ? 'Tüm kütüphanede' : 'Entire library'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateScopeChange('folder')}
+                  className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                    duplicateScope === 'folder'
+                      ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {lang === 'tr' ? 'Aynı klasör içinde' : 'Same folder'}
+                </button>
+              </div>
+
+              {ignoredDuplicateCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetIgnoredDuplicates}
+                  className="text-muted-foreground hover:text-foreground cursor-pointer text-[10px] underline-offset-2 hover:underline"
+                >
+                  {lang === 'tr'
+                    ? `${ignoredDuplicateCount} gizlenen grubu göster`
+                    : `Show ${ignoredDuplicateCount} ignored group(s)`}
+                </button>
+              )}
+            </div>
+          </div>
 
           {isLoading ? (
             <div className="text-muted-foreground flex flex-col items-center justify-center py-12">
               <div className="border-primary size-5 animate-spin rounded-full border-2 border-t-transparent duration-500" />
             </div>
-          ) : duplicates.length === 0 ? (
+          ) : activeDuplicates.length === 0 ? (
             <div className="border-border/60 bg-muted/10 flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-12 text-center">
               <div className="mb-2 flex size-10 items-center justify-center rounded-full bg-emerald-500/10">
                 <CheckCircle2 className="size-5 text-emerald-500" />
@@ -2300,130 +2970,224 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 {t('noDuplicatesTitle') || 'No Duplicates Found'}
               </h3>
               <p className="text-muted-foreground mt-0.5 text-[11px]">
-                {t('noDuplicatesDesc') || 'All your bookmark URLs are unique and clean.'}
+                {duplicateScope === 'folder'
+                  ? lang === 'tr'
+                    ? 'Hiçbir klasör içinde mükerrer yer imi bulunamadı.'
+                    : 'No duplicate bookmarks found inside the same folder.'
+                  : t('noDuplicatesDesc') || 'All your bookmark URLs are unique and clean.'}
               </p>
             </div>
           ) : (
             <div className="space-y-2.5">
-              {duplicates.map((group, idx) => {
+              {activeDuplicates.map((group) => {
+                const keepId = getGroupKeepId(group);
+                const clusters = clusterDuplicateItems(group);
                 const isExpanded = expandedGroups[group.normalizedUrl] ?? false;
-                const visibleItems =
-                  isExpanded || group.items.length <= 3 ? group.items : group.items.slice(0, 3);
-                const hasMore = group.items.length > 3;
+                const visibleClusters =
+                  isExpanded || clusters.length <= 4 ? clusters : clusters.slice(0, 4);
+                const hasMore = clusters.length > 4;
+
+                const distinctTitles = new Set(
+                  clusters.map((c) => (c.primaryItem.title || '').trim())
+                );
+                const distinctDates = new Set(
+                  clusters.map((c) => formatItemDate(c.primaryItem.dateAdded))
+                );
+                const hasTitleDiff = distinctTitles.size > 1;
+                const hasDateDiff = distinctDates.size > 1;
 
                 return (
                   <div
-                    key={idx}
+                    key={group.normalizedUrl}
                     className="border-border/60 bg-card overflow-hidden rounded-lg border shadow-2xs transition-[border-color,background-color,box-shadow] duration-150"
                   >
-                    {/* Group Header */}
-                    <div className="bg-muted/20 border-border/40 flex items-center justify-between gap-2 border-b px-3 py-2">
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <img
-                          src={`https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(
-                            group.displayUrl
-                          )}&sz=32`}
-                          alt=""
-                          className="size-3.5 shrink-0 rounded-xs"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                        <span className="text-foreground truncate text-xs font-semibold">
-                          {group.domain}
-                        </span>
-                        <Badge
-                          variant="secondary"
-                          className="h-4 shrink-0 px-1.5 py-0 text-[9.5px] font-medium"
-                        >
-                          {group.items.length} copies
-                        </Badge>
+                    {/* Group Header (URL shown once cleanly here) */}
+                    <div className="bg-muted/20 border-border/40 space-y-1 border-b px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                          <img
+                            src={`https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(
+                              group.displayUrl
+                            )}&sz=32`}
+                            alt=""
+                            className="size-3.5 shrink-0 rounded-xs"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                          <span className="text-foreground truncate text-xs font-semibold">
+                            {group.domain}
+                          </span>
+                          <Badge
+                            variant="secondary"
+                            className="h-4 shrink-0 px-1.5 py-0 text-[9.5px] font-medium"
+                          >
+                            {lang === 'tr'
+                              ? `${group.items.length} kopya`
+                              : `${group.items.length} copies`}
+                          </Badge>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => handleIgnoreDuplicateGroup(group.normalizedUrl)}
+                            className="text-muted-foreground hover:text-foreground h-6 cursor-pointer px-2 text-[10.5px]"
+                            title={lang === 'tr' ? 'Bu grubu yoksay' : 'Ignore this group'}
+                          >
+                            {lang === 'tr' ? 'Yoksay' : 'Ignore'}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => handleResolveGroup(group, keepId)}
+                            className="h-6 cursor-pointer border-amber-400/50 px-2 text-[10.5px] font-medium text-amber-700 hover:bg-amber-500/10 active:scale-[0.97] dark:text-amber-300"
+                          >
+                            {lang === 'tr'
+                              ? `Temizle (-${group.items.length - 1})`
+                              : `Keep Selected (-${group.items.length - 1})`}
+                          </Button>
+                        </div>
                       </div>
 
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => handleResolveGroup(group, 'newest')}
-                        className="h-6 cursor-pointer border-amber-400/50 px-2 text-[10.5px] font-medium text-amber-700 hover:bg-amber-500/10 active:scale-[0.97] dark:text-amber-300"
+                      <div
+                        className="text-muted-foreground/80 truncate font-mono text-[10px]"
+                        title={group.displayUrl}
                       >
-                        {t('keepNewestBtn') || 'Keep Newest'}
-                      </Button>
+                        {group.displayUrl}
+                      </div>
                     </div>
 
-                    {/* Detailed List of copies (Title, Folder Path, Date Added, Full URL) */}
+                    {/* Clustered 2-Line Rows with Radio Selection & Differing Fields Only */}
                     <div className="divide-border/30 divide-y text-xs">
-                      {visibleItems.map((item, itemIdx) => (
-                        <div
-                          key={item.id}
-                          className={`group flex items-start justify-between gap-2 px-3 py-2 transition-colors ${
-                            itemIdx === 0 ? 'bg-emerald-500/5' : 'hover:bg-muted/30'
-                          }`}
-                        >
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {itemIdx === 0 ? (
-                                <Badge
-                                  variant="outline"
-                                  className="h-3.5 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1 py-0 text-[8.5px] font-medium text-emerald-600 dark:text-emerald-400"
-                                >
-                                  {t('newestBadge') || 'Newest'}
-                                </Badge>
-                              ) : (
-                                <span className="bg-muted-foreground/40 ml-1 size-1.5 shrink-0 rounded-full" />
-                              )}
-                              <span
-                                className="text-foreground truncate text-[11px] font-medium"
-                                title={item.title || item.url}
-                              >
-                                {item.title || item.domain}
-                              </span>
-                            </div>
+                      {visibleClusters.map((cluster) => {
+                        const item = cluster.primaryItem;
+                        const isKeptCluster = cluster.items.some((it) => it.id === keepId);
+                        const radioTargetId = isKeptCluster ? keepId : item.id;
+                        const extraItems = isKeptCluster
+                          ? cluster.items.filter((it) => it.id !== keepId)
+                          : cluster.items;
+                        const urlDiff = getDuplicateUrlDiffBadge(item.url, group.displayUrl);
+                        const dateLabel = formatItemDate(item.dateAdded);
 
-                            <div className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-[10px]">
-                              <span className="max-w-[140px] truncate" title={item.path}>
-                                📁 {formatShortFolderPath(item.path, lang)}
-                              </span>
-                              {item.dateAdded && (
-                                <>
-                                  <span>•</span>
-                                  <span className="shrink-0">{formatItemDate(item.dateAdded)}</span>
-                                </>
-                              )}
+                        return (
+                          <div
+                            key={cluster.key}
+                            onClick={() => handleSelectKeepId(group.normalizedUrl, radioTargetId)}
+                            className={`group flex cursor-pointer items-center justify-between gap-2 px-3 py-2 transition-colors ${
+                              isKeptCluster ? 'bg-emerald-500/5' : 'hover:bg-muted/30'
+                            }`}
+                          >
+                            <div className="flex min-w-0 flex-1 items-start gap-2">
+                              <input
+                                type="radio"
+                                name={`dup-keep-${group.normalizedUrl}`}
+                                checked={isKeptCluster}
+                                onChange={() =>
+                                  handleSelectKeepId(group.normalizedUrl, radioTargetId)
+                                }
+                                onClick={(e) => e.stopPropagation()}
+                                className="mt-0.5 size-3.5 shrink-0 cursor-pointer accent-amber-600"
+                              />
+                              <div className="min-w-0 flex-1 space-y-0.5">
+                                {/* Line 1: Keep badge + Title + Identical cluster count */}
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  {isKeptCluster && (
+                                    <Badge
+                                      variant="outline"
+                                      className="h-3.5 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1 py-0 text-[8.5px] font-medium text-emerald-600 dark:text-emerald-400"
+                                    >
+                                      {lang === 'tr' ? 'Kalacak' : 'Keep'}
+                                    </Badge>
+                                  )}
+                                  <span
+                                    className={`truncate text-[11px] font-medium ${
+                                      hasTitleDiff || isKeptCluster
+                                        ? 'text-foreground'
+                                        : 'text-muted-foreground'
+                                    }`}
+                                    title={item.title || item.url}
+                                  >
+                                    {item.title || item.domain}
+                                  </span>
+                                  {cluster.count > 1 && (
+                                    <Badge
+                                      variant="secondary"
+                                      className="h-3.5 shrink-0 bg-amber-500/15 px-1.5 py-0 text-[8.5px] font-semibold text-amber-700 dark:text-amber-300"
+                                    >
+                                      {isKeptCluster
+                                        ? lang === 'tr'
+                                          ? `×${cluster.count} birebir aynı, ${cluster.count - 1}'i silinecek`
+                                          : `×${cluster.count} identical, ${cluster.count - 1} to delete`
+                                        : lang === 'tr'
+                                          ? `×${cluster.count} birebir aynı, silinecek`
+                                          : `×${cluster.count} identical, delete all`}
+                                    </Badge>
+                                  )}
+                                </div>
+
+                                {/* Line 2: Differing context only (Folder, Date if differs/needed, URL diff tag) */}
+                                <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[10px]">
+                                  <span className="truncate" title={item.path}>
+                                    📁 {formatShortFolderPath(item.path, lang)}
+                                  </span>
+                                  {dateLabel && (hasDateDiff || clusters.length === 1) && (
+                                    <>
+                                      <span className="shrink-0">•</span>
+                                      <span className="shrink-0">{dateLabel}</span>
+                                    </>
+                                  )}
+                                  {urlDiff && (
+                                    <>
+                                      <span className="shrink-0">•</span>
+                                      <span className="bg-muted truncate rounded px-1 font-mono text-[9px]">
+                                        {urlDiff}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
                             </div>
 
                             <div
-                              className="text-muted-foreground/75 truncate font-mono text-[10px]"
-                              title={item.url}
+                              className="flex shrink-0 items-center gap-1 opacity-75 transition-opacity group-hover:opacity-100"
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              {item.url}
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 transition-transform active:scale-90"
+                                title={t('openInTabTooltip') || 'Open in new tab'}
+                              >
+                                <ExternalLink className="size-3" />
+                              </a>
+                              {extraItems.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveDuplicateItems(group, extraItems)}
+                                  className="text-muted-foreground cursor-pointer p-1 transition-[color,transform] duration-120 hover:text-rose-500 active:scale-90"
+                                  title={
+                                    extraItems.length > 1
+                                      ? lang === 'tr'
+                                        ? `${extraItems.length} fazlalık kopyayı sil`
+                                        : `Delete ${extraItems.length} extra copies`
+                                      : lang === 'tr'
+                                        ? 'Bu kopyayı sil'
+                                        : 'Delete this copy'
+                                  }
+                                >
+                                  <Trash2 className="size-3" />
+                                </button>
+                              )}
                             </div>
                           </div>
-
-                          <div className="flex shrink-0 items-center gap-1 pt-0.5 opacity-75 transition-opacity group-hover:opacity-100">
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-muted-foreground hover:text-foreground cursor-pointer p-1 transition-transform active:scale-90"
-                              title="Open in new tab"
-                            >
-                              <ExternalLink className="size-3" />
-                            </a>
-                            {itemIdx !== 0 && (
-                              <button
-                                onClick={() => handleRemoveSingleDuplicate(group, item)}
-                                className="text-muted-foreground cursor-pointer p-1 transition-[color,transform] duration-120 hover:text-rose-500 active:scale-90"
-                                title="Delete this copy"
-                              >
-                                <Trash2 className="size-3" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
-                    {/* Expand/Collapse Footer if > 3 items */}
+                    {/* Expand/Collapse Footer if > 4 distinct clusters */}
                     {hasMore && (
                       <div className="bg-muted/10 border-border/30 border-t px-3 py-1 text-center">
                         <button
@@ -2432,14 +3196,77 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           className="text-muted-foreground hover:text-foreground cursor-pointer text-[10px] font-medium transition-colors"
                         >
                           {isExpanded
-                            ? 'Show less'
-                            : `+ Show ${group.items.length - 3} more copies`}
+                            ? lang === 'tr'
+                              ? 'Daha az göster'
+                              : 'Show less'
+                            : lang === 'tr'
+                              ? `+ ${clusters.length - 4} farklı satır daha göster`
+                              : `+ Show ${clusters.length - 4} more variations`}
                         </button>
                       </div>
                     )}
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Separate Collapsible Separators Group (Excluded by Default) */}
+          {separatorGroups.length > 0 && (
+            <div className="border-border/50 bg-muted/15 overflow-hidden rounded-lg border">
+              <button
+                type="button"
+                onClick={() => setShowSeparatorsSection((prev) => !prev)}
+                className="hover:bg-muted/30 flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs transition-colors"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  {showSeparatorsSection ? (
+                    <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
+                  ) : (
+                    <ChevronRight className="text-muted-foreground size-3.5 shrink-0" />
+                  )}
+                  <span className="text-foreground font-semibold">
+                    {lang === 'tr' ? 'Ayırıcılar (Separators)' : 'Separators'}
+                  </span>
+                  <Badge variant="secondary" className="h-4 px-1.5 py-0 text-[9px]">
+                    {separatorGroups.length} {lang === 'tr' ? 'grup' : 'groups'}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="border-border/60 text-muted-foreground h-4 px-1.5 py-0 text-[8.5px]"
+                  >
+                    {lang === 'tr' ? 'Varsayılan olarak hariç' : 'Excluded by default'}
+                  </Badge>
+                </div>
+              </button>
+
+              {showSeparatorsSection && (
+                <div className="border-border/40 divide-border/30 divide-y border-t px-3 py-2 text-[11px]">
+                  <p className="text-muted-foreground pb-2 text-[10.5px]">
+                    {lang === 'tr'
+                      ? 'Klasör ayırıcıları (ör. bookmarkseparators.com veya çizgi başlıklı ayırıcılar) düzeninizi korumak için Clean All kapsamı dışında tutulur.'
+                      : 'Folder dividers (such as bookmarkseparators.com or line-titled separators) are excluded from duplicate cleanup to preserve folder layout.'}
+                  </p>
+                  {separatorGroups.map((sepGroup) => (
+                    <div
+                      key={sepGroup.normalizedUrl}
+                      className="flex items-center justify-between gap-2 py-1.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-foreground truncate font-medium">
+                          {sepGroup.domain || sepGroup.items[0]?.title || 'Separator'}
+                        </div>
+                        <div className="text-muted-foreground truncate font-mono text-[9.5px]">
+                          {sepGroup.displayUrl}
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="h-4 shrink-0 px-1.5 py-0 text-[9px]">
+                        {sepGroup.items.length} {lang === 'tr' ? 'klasörde' : 'items'}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2450,84 +3277,21 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         <div className={subTab === 'similar' ? 'space-y-3' : 'hidden'}>
           {/* Header Hero Banner */}
           <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Layers className="size-4 shrink-0 text-cyan-500" />
-                  <h3 className="text-foreground text-sm font-bold">
-                    {t('similarTitle') || 'Similar Bookmarks'}
-                  </h3>
-                  <span className="text-muted-foreground text-xs">
-                    {t('similarFound', { count: similarGroups.length }) ||
-                      `${similarGroups.length} similarities in total`}
-                  </span>
-                </div>
-                <p className="text-muted-foreground mt-0.5 text-[11px]">
-                  {t('similarSubtitle') || 'Bookmarks sharing the same base URL or page path.'}
-                </p>
-              </div>
-
-              {/* Batch actions when bookmarks are selected */}
-              {selectedSimilarIds.size > 0 && (
-                <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
-                  <Badge
-                    variant="outline"
-                    className="h-6 border-cyan-500/30 px-2 text-[10px] text-cyan-600 dark:text-cyan-400"
-                  >
-                    {selectedSimilarIds.size} selected
-                  </Badge>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleOpenSelectedSimilar}
-                    className="h-7 border-cyan-500/30 px-2 text-xs text-cyan-700 hover:bg-cyan-500/10 active:scale-[0.97] dark:text-cyan-300"
-                    title="Open selected bookmarks in tabs"
-                  >
-                    <ExternalLink className="mr-1 size-3" />
-                    {t('openInTabs') || 'Open in Tabs'}
-                  </Button>
-                  {confirmDeleteSimilar ? (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={handleDeleteSelectedSimilar}
-                        disabled={isDeletingSimilar}
-                        className="h-7 px-2 text-xs active:scale-[0.97]"
-                      >
-                        {isDeletingSimilar ? (
-                          <Loader2 className="mr-1 size-3 animate-spin" />
-                        ) : (
-                          <Trash2 className="mr-1 size-3" />
-                        )}
-                        {lang === 'tr'
-                          ? `Onayla (${selectedSimilarIds.size})`
-                          : `Confirm (${selectedSimilarIds.size})`}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setConfirmDeleteSimilar(false)}
-                        className="h-7 px-2 text-xs"
-                      >
-                        {t('cancelBtn') || 'Cancel'}
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => setConfirmDeleteSimilar(true)}
-                      disabled={isDeletingSimilar}
-                      className="h-7 px-2 text-xs active:scale-[0.97]"
-                    >
-                      <Trash2 className="mr-1 size-3" />
-                      {t('deleteSelected') || 'Delete Selected'}
-                    </Button>
-                  )}
-                </div>
-              )}
+            <div className="flex items-center gap-2">
+              <Layers className="size-4 shrink-0 text-cyan-500" />
+              <h3 className="text-foreground text-sm font-bold">
+                {t('similarTitle') || 'Similar Bookmarks'}
+              </h3>
+              <span className="text-muted-foreground text-xs font-medium">
+                {lang === 'tr'
+                  ? `${similarGroups.length} grup`
+                  : t('similarFound', { count: similarGroups.length }) ||
+                    `${similarGroups.length} groups`}
+              </span>
             </div>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">
+              {t('similarSubtitle') || 'Bookmarks sharing the same base URL or page path.'}
+            </p>
           </div>
 
           {/* Global Select All Bar (if groups exist) */}
@@ -2541,11 +3305,18 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   className="border-border size-3.5 cursor-pointer rounded accent-cyan-600"
                 />
                 <span className="text-foreground text-[11px] font-medium">
-                  {isAllSimilarSelected ? 'Deselect All' : 'Select All Bookmarks'}
+                  {isAllSimilarSelected
+                    ? lang === 'tr'
+                      ? 'Tüm seçimi kaldır'
+                      : 'Deselect All'
+                    : lang === 'tr'
+                      ? 'Tüm yer imlerini seç'
+                      : 'Select All Bookmarks'}
                 </span>
               </label>
               <span className="text-muted-foreground text-[10px]">
-                {similarGroups.reduce((acc, g) => acc + g.items.length, 0)} total links
+                {similarGroups.reduce((acc, g) => acc + g.items.length, 0)}{' '}
+                {lang === 'tr' ? 'toplam link' : 'total links'}
               </span>
             </div>
           )}
@@ -2569,15 +3340,16 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 pb-4">
               {similarGroups.map((group) => {
                 const isGroupAllSelected = group.items.every((it) => selectedSimilarIds.has(it.id));
+                const groupUrls = group.items.map((it) => it.url);
                 return (
                   <div
                     key={group.id}
                     className="border-border/60 bg-card overflow-hidden rounded-lg border shadow-2xs"
                   >
-                    {/* Group Header */}
+                    {/* Group Header (clean domain + select-except-newest + links count) */}
                     <div className="bg-muted/30 border-border/40 flex items-center justify-between gap-2 border-b px-3 py-2">
                       <div className="flex min-w-0 items-center gap-2">
                         <input
@@ -2595,56 +3367,80 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           }}
                         />
                         <span
-                          className="text-foreground truncate font-mono text-xs font-semibold"
+                          className="text-foreground truncate text-xs font-semibold"
                           title={group.baseUrl}
                         >
-                          {group.baseUrl}
+                          {group.domain || group.baseUrl}
                         </span>
                       </div>
-                      <Badge variant="outline" className="h-4 shrink-0 px-1.5 py-0 text-[9px]">
-                        {group.items.length} links
-                      </Badge>
+
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => selectExceptNewestInGroup(group)}
+                          className="border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                          title={
+                            lang === 'tr'
+                              ? 'En yeni kayıt hariç gruptaki tümünü seç'
+                              : 'Select all items in this group except the newest'
+                          }
+                        >
+                          {lang === 'tr' ? 'En yenisi hariç seç' : 'Except newest'}
+                        </button>
+                        <Badge variant="outline" className="h-4 shrink-0 px-1.5 py-0 text-[9px]">
+                          {group.items.length} {lang === 'tr' ? 'link' : 'links'}
+                        </Badge>
+                      </div>
                     </div>
 
-                    {/* Group Items */}
+                    {/* Group Items with Highlighted URL Differences */}
                     <div className="divide-border/30 divide-y">
                       {group.items.map((item) => {
                         const isSelected = selectedSimilarIds.has(item.id);
+                        const { prefix, diff } = splitUrlDiff(item.url, groupUrls);
+
                         return (
                           <div
                             key={item.id}
-                            className={`group hover:bg-muted/40 flex items-center justify-between gap-2.5 px-3 py-2 transition-colors ${
+                            className={`group hover:bg-muted/40 flex items-start justify-between gap-2.5 px-3 py-2 transition-colors ${
                               isSelected ? 'bg-cyan-500/5' : ''
                             }`}
                           >
-                            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                            <div className="flex min-w-0 flex-1 items-start gap-2.5">
                               <input
                                 type="checkbox"
                                 checked={isSelected}
                                 onChange={() => toggleSelectSimilar(item.id)}
-                                className="border-border size-3.5 shrink-0 cursor-pointer rounded accent-cyan-600"
+                                className="border-border mt-0.5 size-3.5 shrink-0 cursor-pointer rounded accent-cyan-600"
                               />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5">
+                              <div className="min-w-0 flex-1 space-y-0.5">
+                                <div className="flex min-w-0 items-center gap-1.5">
                                   <span className="text-foreground truncate text-xs font-medium">
                                     {item.title || item.domain}
-                                  </span>
-                                </div>
-                                <div className="mt-0.5 flex items-center gap-2">
-                                  <span
-                                    className="text-muted-foreground/75 max-w-[210px] truncate font-mono text-[10px]"
-                                    title={item.url}
-                                  >
-                                    {item.url}
                                   </span>
                                   {item.path && (
                                     <Badge
                                       variant="outline"
-                                      className="text-muted-foreground border-border/50 h-3.5 max-w-[120px] shrink-0 truncate px-1 py-0 text-[8.5px]"
+                                      className="text-muted-foreground border-border/50 ml-auto h-3.5 max-w-[120px] shrink-0 truncate px-1 py-0 text-[8.5px]"
                                       title={item.path}
                                     >
                                       📁 {formatShortFolderPath(item.path, lang)}
                                     </Badge>
+                                  )}
+                                </div>
+                                <div
+                                  className="font-mono text-[10px] leading-snug break-all"
+                                  title={item.url}
+                                >
+                                  <span className="text-muted-foreground/70">{prefix}</span>
+                                  {diff ? (
+                                    <span className="rounded-xs bg-cyan-500/15 px-1 font-semibold text-cyan-700 dark:text-cyan-300">
+                                      {diff}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground/70 ml-1 font-sans text-[9.5px] italic">
+                                      ({lang === 'tr' ? 'temel URL' : 'base URL'})
+                                    </span>
                                   )}
                                 </div>
                               </div>
@@ -2677,6 +3473,245 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Sticky Bottom Action Bar (Delete, Merge, Move) */}
+          {selectedSimilarIds.size > 0 && (
+            <div className="bg-card/95 sticky bottom-2 z-20 space-y-2 rounded-xl border border-cyan-500/35 p-2.5 shadow-lg backdrop-blur-md">
+              {/* Inline Merge Panel */}
+              {similarActionPanel === 'merge' && selectedSimilarItems.length >= 2 && (
+                <div className="border-border/50 bg-muted/30 space-y-2 rounded-lg border p-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold">
+                      {lang === 'tr'
+                        ? 'Birleştir: Hangisi kalsın?'
+                        : 'Merge: Choose bookmark to keep'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSimilarActionPanel(null)}
+                      className="text-muted-foreground hover:text-foreground cursor-pointer p-0.5"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                  <div className="max-h-32 space-y-1 overflow-y-auto">
+                    {selectedSimilarItems.map((it) => (
+                      <label
+                        key={it.id}
+                        className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded px-1.5 py-1"
+                      >
+                        <input
+                          type="radio"
+                          name="similar-merge-keep"
+                          checked={mergeKeepId === it.id}
+                          onChange={() => {
+                            setMergeKeepId(it.id);
+                            setMergeTitle(it.title || it.domain);
+                          }}
+                          className="size-3.5 shrink-0 cursor-pointer accent-cyan-600"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
+                          {it.title || it.url}
+                        </span>
+                        <span className="text-muted-foreground max-w-[90px] shrink-0 truncate text-[9.5px]">
+                          {formatShortFolderPath(it.path, lang)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={mergeTitle}
+                      onChange={(e) => setMergeTitle(e.target.value)}
+                      placeholder={lang === 'tr' ? 'Son başlık...' : 'Final title...'}
+                      className="h-7 flex-1 text-xs"
+                    />
+                    <Button
+                      size="xs"
+                      disabled={isMergingSimilar}
+                      onClick={handleConfirmMergeSimilar}
+                      className="h-7 cursor-pointer bg-cyan-600 px-2.5 text-[11px] font-semibold text-white hover:bg-cyan-700"
+                    >
+                      {isMergingSimilar ? (
+                        <Loader2 className="mr-1 size-3 animate-spin" />
+                      ) : (
+                        <GitMerge className="mr-1 size-3" />
+                      )}
+                      {lang === 'tr'
+                        ? `Birleştir (${selectedSimilarItems.length - 1} sil)`
+                        : `Merge (-${selectedSimilarItems.length - 1})`}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Inline Move Folder Picker */}
+              {similarActionPanel === 'move' && (
+                <div className="border-border/50 bg-muted/30 space-y-2 rounded-lg border p-2.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      {lang === 'tr'
+                        ? `${selectedSimilarIds.size} yer imini taşı:`
+                        : `Move ${selectedSimilarIds.size} bookmark(s) to:`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSimilarActionPanel(null)}
+                      className="text-muted-foreground hover:text-foreground cursor-pointer p-0.5"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                  <Input
+                    value={moveFolderSearch}
+                    onChange={(e) => setMoveFolderSearch(e.target.value)}
+                    placeholder={lang === 'tr' ? 'Klasör ara...' : 'Filter folders...'}
+                    className="h-7 text-xs"
+                  />
+                  <div className="divide-border/30 bg-background/80 max-h-36 divide-y overflow-y-auto rounded border">
+                    {filteredMoveFolders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        disabled={isMovingSimilar}
+                        onClick={() => handleMoveSelectedSimilar(folder.id, folder.title)}
+                        className="hover:bg-muted/50 flex w-full cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors"
+                      >
+                        <span className="flex min-w-0 items-center gap-1.5 truncate">
+                          <Folder className="size-3 shrink-0 text-amber-500" />
+                          <span className="truncate font-medium">
+                            {formatFolderTitle(folder.title, lang)}
+                          </span>
+                        </span>
+                        <span className="text-muted-foreground max-w-[140px] shrink-0 truncate text-[9.5px]">
+                          {formatShortFolderPath(folder.path, lang)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Controls Row */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Badge
+                    variant="outline"
+                    className="h-6 border-cyan-500/30 px-2 text-[10.5px] font-semibold text-cyan-600 dark:text-cyan-400"
+                  >
+                    {selectedSimilarIds.size} {lang === 'tr' ? 'seçili' : 'selected'}
+                  </Badge>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedSimilarIds(new Set());
+                      setSimilarActionPanel(null);
+                      setConfirmDeleteSimilar(false);
+                    }}
+                    className="text-muted-foreground hover:text-foreground cursor-pointer p-1 text-[10.5px]"
+                    title={lang === 'tr' ? 'Seçimi temizle' : 'Clear selection'}
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={handleOpenSelectedSimilar}
+                    className="text-muted-foreground hover:text-foreground h-7 cursor-pointer px-2 text-[11px]"
+                    title={t('openInTabs') || 'Open in Tabs'}
+                  >
+                    <ExternalLink className="mr-1 size-3" />
+                    {lang === 'tr' ? 'Aç' : 'Open'}
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={selectedSimilarIds.size < 2 || isMergingSimilar}
+                    onClick={handleOpenMergeSimilar}
+                    className={`h-7 cursor-pointer px-2.5 text-[11px] font-medium ${
+                      similarActionPanel === 'merge' ? 'border-cyan-500 bg-cyan-500/10' : ''
+                    }`}
+                    title={
+                      selectedSimilarIds.size < 2
+                        ? lang === 'tr'
+                          ? 'Birleştirmek için en az 2 kayıt seçin'
+                          : 'Select at least 2 items to merge'
+                        : lang === 'tr'
+                          ? 'Seçilenleri birleştir'
+                          : 'Merge selected bookmarks'
+                    }
+                  >
+                    <GitMerge className="mr-1 size-3" />
+                    {lang === 'tr' ? 'Birleştir' : 'Merge'}
+                  </Button>
+
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={isMovingSimilar}
+                    onClick={() => {
+                      setConfirmDeleteSimilar(false);
+                      setSimilarActionPanel((prev) => (prev === 'move' ? null : 'move'));
+                    }}
+                    className={`h-7 cursor-pointer px-2.5 text-[11px] font-medium ${
+                      similarActionPanel === 'move' ? 'border-cyan-500 bg-cyan-500/10' : ''
+                    }`}
+                  >
+                    <FolderInput className="mr-1 size-3" />
+                    {lang === 'tr' ? 'Taşı' : 'Move'}
+                  </Button>
+
+                  {confirmDeleteSimilar ? (
+                    <>
+                      <Button
+                        size="xs"
+                        variant="destructive"
+                        onClick={handleDeleteSelectedSimilar}
+                        disabled={isDeletingSimilar}
+                        className="h-7 cursor-pointer px-2.5 text-[11px] active:scale-[0.97]"
+                      >
+                        {isDeletingSimilar ? (
+                          <Loader2 className="mr-1 size-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="mr-1 size-3" />
+                        )}
+                        {lang === 'tr'
+                          ? `Onayla (${selectedSimilarIds.size})`
+                          : `Confirm (${selectedSimilarIds.size})`}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => setConfirmDeleteSimilar(false)}
+                        className="h-7 px-2 text-[11px]"
+                      >
+                        {t('cancelBtn') || 'Cancel'}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      onClick={() => {
+                        setSimilarActionPanel(null);
+                        setConfirmDeleteSimilar(true);
+                      }}
+                      disabled={isDeletingSimilar}
+                      className="h-7 cursor-pointer px-2.5 text-[11px] font-semibold active:scale-[0.97]"
+                    >
+                      <Trash2 className="mr-1 size-3" />
+                      {lang === 'tr'
+                        ? `Sil (${selectedSimilarIds.size})`
+                        : `Delete (${selectedSimilarIds.size})`}
+                    </Button>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -2727,7 +3762,11 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   ) : (
                     <>
                       <Sparkles className="mr-1 size-3" />
-                      <span>{t('cleanAllUrlsBtn') || 'Clean All URLs'}</span>
+                      <span>
+                        {lang === 'tr'
+                          ? `Tümünü Temizle (${trackingItems.length})`
+                          : `Clean All (${trackingItems.length})`}
+                      </span>
                     </>
                   )}
                 </Button>
@@ -2807,74 +3846,75 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 return (
                   <div
                     key={item.bookmark.id}
-                    className="group border-border/50 bg-card hover:border-border rounded-lg border p-3 shadow-2xs transition-[border-color,background-color] duration-120"
+                    className="group border-border/50 bg-card hover:border-border space-y-1.5 rounded-lg border p-2.5 shadow-2xs transition-[border-color,background-color] duration-120"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        {/* Title & Domain */}
-                        <div className="flex items-center gap-2">
-                          <img
-                            src={`https://www.google.com/s2/favicons?domain=${item.bookmark.domain}&sz=32`}
-                            alt=""
-                            className="size-3.5 shrink-0 rounded-xs"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                          <span className="text-foreground truncate text-xs font-semibold">
-                            {item.bookmark.title || item.bookmark.domain}
-                          </span>
-                          {item.bookmark.path && (
-                            <Badge
-                              variant="outline"
-                              className="text-muted-foreground border-border/50 h-4 max-w-[130px] shrink-0 truncate px-1.5 py-0 text-[9px]"
-                              title={item.bookmark.path}
-                            >
-                              📁 {formatShortFolderPath(item.bookmark.path, lang)}
-                            </Badge>
-                          )}
-                        </div>
-
-                        {/* Before -> After URL Preview */}
-                        <div className="bg-muted/25 border-border/30 space-y-1 rounded border p-2 font-mono text-[10px] leading-relaxed break-all">
-                          <div className="text-muted-foreground/85">
-                            {item.segments.map((seg, idx) =>
-                              seg.isRemoved ? (
-                                <span
-                                  key={idx}
-                                  className="rounded-xs bg-rose-500/15 px-0.5 font-semibold text-rose-600 line-through dark:text-rose-400"
-                                >
-                                  {seg.text}
-                                </span>
-                              ) : (
-                                <span key={idx}>{seg.text}</span>
-                              )
-                            )}
-                          </div>
-                          <div className="flex items-start gap-1 text-emerald-600 dark:text-emerald-400">
-                            <span className="shrink-0 font-sans font-bold">→</span>
-                            <span className="font-medium break-all">{item.cleanUrl}</span>
-                          </div>
-                        </div>
+                    {/* Header Row: Favicon + Title + Folder + Clean button */}
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${item.bookmark.domain}&sz=32`}
+                          alt=""
+                          className="size-3.5 shrink-0 rounded-xs"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                        <span className="text-foreground min-w-0 truncate text-xs font-semibold">
+                          {item.bookmark.title || item.bookmark.domain}
+                        </span>
+                        {item.bookmark.path && (
+                          <Badge
+                            variant="outline"
+                            className="text-muted-foreground border-border/50 h-4 max-w-[125px] shrink-0 truncate px-1.5 py-0 text-[9px]"
+                            title={item.bookmark.path}
+                          >
+                            📁 {formatShortFolderPath(item.bookmark.path, lang)}
+                          </Badge>
+                        )}
                       </div>
 
-                      {/* Quick Clean Action */}
-                      <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={isCleaningThis || isCleaningTrackers}
-                          onClick={() => handleCleanSingleTracker(item)}
-                          className="h-7 cursor-pointer border-teal-500/30 px-2 text-xs text-teal-700 hover:bg-teal-500/10 active:scale-[0.97] dark:text-teal-300"
-                          title="Clean tracking parameters from this URL"
-                        >
-                          {isCleaningThis ? (
-                            <Loader2 className="mr-1 size-3 animate-spin" />
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={isCleaningThis || isCleaningTrackers}
+                        onClick={() => handleCleanSingleTracker(item)}
+                        className="h-6 shrink-0 cursor-pointer border-teal-500/30 px-2 text-[10.5px] text-teal-700 hover:bg-teal-500/10 active:scale-[0.97] dark:text-teal-300"
+                        title="Clean tracking parameters from this URL"
+                      >
+                        {isCleaningThis ? (
+                          <Loader2 className="mr-1 size-2.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="mr-1 size-2.5" />
+                        )}
+                        <span>{lang === 'tr' ? 'Temizle' : 'Clean'}</span>
+                      </Button>
+                    </div>
+
+                    {/* Single-Line Compact Before -> After Full URL Preview */}
+                    <div className="bg-muted/25 border-border/30 space-y-0.5 rounded border px-2 py-1 font-mono text-[9.5px] leading-tight">
+                      <div
+                        className="text-muted-foreground/85 overflow-x-auto whitespace-nowrap"
+                        title={item.originalUrl}
+                      >
+                        {item.segments.map((seg, idx) =>
+                          seg.isRemoved ? (
+                            <span
+                              key={idx}
+                              className="rounded-xs bg-rose-500/15 px-0.5 font-semibold text-rose-600 line-through dark:text-rose-400"
+                            >
+                              {seg.text}
+                            </span>
                           ) : (
-                            <Sparkles className="mr-1 size-3" />
-                          )}
-                          <span>Clean</span>
-                        </Button>
+                            <span key={idx}>{seg.text}</span>
+                          )
+                        )}
+                      </div>
+                      <div
+                        className="flex items-center gap-1 overflow-x-auto whitespace-nowrap text-emerald-600 dark:text-emerald-400"
+                        title={item.cleanUrl}
+                      >
+                        <span className="shrink-0 font-sans font-bold">→</span>
+                        <span className="font-medium">{item.cleanUrl}</span>
                       </div>
                     </div>
                   </div>
@@ -2906,8 +3946,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   <Info className="size-3 shrink-0 text-amber-500" />
                   <span>
                     {lang === 'tr'
-                      ? 'Şifresiz (http://) bağlantılar. Toplu yükseltme yalnızca HTTPS yanıtı doğrulanan sitelere uygulanır.'
-                      : 'Unencrypted (http://) links. Bulk upgrade only modifies sites verified to support HTTPS.'}
+                      ? 'Şifresiz (http://) bağlantılar. Toplu yükseltme yalnızca doğrulanan HTTPS sitelerine uygulanır.'
+                      : 'Unencrypted (http://) links. Bulk upgrade only modifies verified HTTPS sites.'}
                   </span>
                 </p>
               </div>
@@ -2942,10 +3982,10 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                       <>
                         <ShieldCheck className="mr-1 size-3" />
                         <span>
-                          {httpsVerifyMap.size > 0
+                          {hasCompletedHttpsVerify
                             ? lang === 'tr'
-                              ? `Yeniden Doğrula (${verifiedHttpItems.length} hazır)`
-                              : `Re-Verify (${verifiedHttpItems.length} ready)`
+                              ? 'Yeniden Doğrula'
+                              : 'Re-Verify'
                             : lang === 'tr'
                               ? 'HTTPS Doğrula'
                               : 'Verify HTTPS'}
@@ -2958,11 +3998,19 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                     size="sm"
                     onClick={handleUpgradeAllHttpsClick}
                     disabled={
+                      !hasCompletedHttpsVerify ||
+                      verifiedHttpItems.length === 0 ||
                       isUpgradingHttps ||
-                      isVerifyingHttps ||
-                      (httpsVerifyMap.size > 0 && verifiedHttpItems.length === 0)
+                      isVerifyingHttps
                     }
-                    className="h-7 cursor-pointer border border-amber-500/40 bg-amber-600 text-xs font-semibold text-white shadow-xs hover:bg-amber-700 active:scale-[0.97] dark:bg-amber-500 dark:hover:bg-amber-600"
+                    title={
+                      !hasCompletedHttpsVerify
+                        ? lang === 'tr'
+                          ? 'Önce "HTTPS Doğrula" taramasını tamamlayın'
+                          : 'Complete "Verify HTTPS" scan first'
+                        : undefined
+                    }
+                    className="h-7 cursor-pointer border border-amber-500/40 bg-amber-600 text-xs font-semibold text-white shadow-xs hover:bg-amber-700 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-500 dark:hover:bg-amber-600"
                   >
                     {isUpgradingHttps ? (
                       <>
@@ -2977,11 +4025,9 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                       <>
                         <Lock className="mr-1 size-3" />
                         <span>
-                          {httpsVerifyMap.size > 0
-                            ? lang === 'tr'
-                              ? `Doğrulananları Yükselt (${verifiedHttpItems.length})`
-                              : `Upgrade Verified (${verifiedHttpItems.length})`
-                            : t('upgradeAllHttpsBtn') || 'Verify & Upgrade All'}
+                          {lang === 'tr'
+                            ? `${verifiedHttpItems.length} doğrulanmışı yükselt`
+                            : `Upgrade ${verifiedHttpItems.length} verified`}
                         </span>
                       </>
                     )}
@@ -2989,6 +4035,58 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </div>
               )}
             </div>
+
+            {/* Live HTTPS Verification Progress Bar (e.g. 45/159) */}
+            {isVerifyingHttps && verifyHttpsProgress && (
+              <div className="animate-in fade-in mt-2.5 space-y-1 border-t border-amber-500/15 pt-2 duration-150">
+                <div className="text-muted-foreground flex items-center justify-between text-[10.5px]">
+                  <span className="max-w-[210px] truncate font-mono">
+                    {verifyHttpsProgress.currentDomain ||
+                      (lang === 'tr' ? 'Test ediliyor...' : 'Checking...')}
+                  </span>
+                  <span className="font-medium text-amber-700 dark:text-amber-300">
+                    {verifyHttpsProgress.current}/{verifyHttpsProgress.total} (
+                    {Math.round(
+                      (verifyHttpsProgress.current / (verifyHttpsProgress.total || 1)) * 100
+                    )}
+                    %)
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-amber-500/15">
+                  <div
+                    className="h-full bg-amber-500 transition-[width] duration-150 ease-out"
+                    style={{
+                      width: `${
+                        (verifyHttpsProgress.current / (verifyHttpsProgress.total || 1)) * 100
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Notice banner when dead links found during verification were routed to 404 tab */}
+            {deadMovedCount > 0 && !isVerifyingHttps && (
+              <div className="mt-2.5 flex items-center justify-between gap-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[10.5px] text-rose-700 dark:text-rose-300">
+                <div className="flex items-center gap-1.5">
+                  <Link2Off className="size-3.5 shrink-0" />
+                  <span>
+                    {lang === 'tr'
+                      ? `${deadMovedCount} ölü/ulaşılamayan site doğrulama sırasında 404 sekmesine yönlendirildi.`
+                      : `${deadMovedCount} dead/unreachable site(s) were routed to the 404 Links tab.`}
+                  </span>
+                </div>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => handleSubTabChange('broken')}
+                  className="h-6 shrink-0 cursor-pointer px-2 text-[10.5px] font-semibold text-rose-700 hover:bg-rose-500/15 dark:text-rose-300"
+                >
+                  {lang === 'tr' ? "404'e Git" : 'Open 404'}
+                  <ArrowRight className="ml-1 size-3" />
+                </Button>
+              </div>
+            )}
 
             {/* Brief Permission Explanation / Denied Warning for HTTP verification */}
             {!hasScanPermission && insecureBookmarks.length > 0 && (
@@ -3003,8 +4101,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <span>
                   {scanPermissionDenied
                     ? lang === 'tr'
-                      ? 'İzin gerekli: HTTPS doğrulaması için site erişim izni verilmedi. Satır içi tekli yükseltmeleri hâlâ kullanabilirsiniz.'
-                      : 'Permission required: Site access was denied for HTTPS verification. Single-row upgrades still work.'
+                      ? 'İzin gerekli: HTTPS doğrulaması için site erişim izni verilmedi. Satır menüsünden tekil işlem yapabilirsiniz.'
+                      : 'Permission required: Site access was denied for HTTPS verification. Single-row actions remain available.'
                     : lang === 'tr'
                       ? 'HTTPS desteğini test etmek için siteleri ziyaret etmemiz gerekiyor, sayfa içeriği saklanmaz.'
                       : 'To verify HTTPS support, we need permission to visit bookmarked sites. Page content is never stored.'}
@@ -3012,32 +4110,59 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
               </div>
             )}
 
-            {/* Search / Filter input for long HTTP lists */}
-            {insecureBookmarks.length > 8 && (
-              <div className="relative mt-2.5">
-                <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-3 -translate-y-1/2" />
-                <Input
-                  value={httpSearchQuery}
-                  onChange={(e) => {
-                    setHttpSearchQuery(e.target.value);
-                    setVisibleHttpCount(30);
-                  }}
-                  placeholder={
-                    lang === 'tr'
-                      ? 'HTTP yer imlerinde ara (başlık, domain veya klasör)...'
-                      : 'Filter HTTP bookmarks by title, domain, or folder...'
-                  }
-                  className="bg-background/70 border-border/60 h-7 pr-7 pl-7 text-xs"
-                />
-                {httpSearchQuery && (
+            {/* Search + Domain Grouping Toggle */}
+            {insecureBookmarks.length > 0 && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <div className="relative min-w-[180px] flex-1">
+                  <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-3 -translate-y-1/2" />
+                  <Input
+                    value={httpSearchQuery}
+                    onChange={(e) => {
+                      setHttpSearchQuery(e.target.value);
+                      setVisibleHttpCount(30);
+                    }}
+                    placeholder={
+                      lang === 'tr'
+                        ? 'HTTP yer imlerinde ara (başlık, domain veya klasör)...'
+                        : 'Filter HTTP bookmarks by title, domain, or folder...'
+                    }
+                    className="bg-background/70 border-border/60 h-7 pr-7 pl-7 text-xs"
+                  />
+                  {httpSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setHttpSearchQuery('')}
+                      className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer p-0.5"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="bg-background/60 border-border/50 inline-flex shrink-0 items-center rounded-md border p-0.5 text-[10px]">
                   <button
                     type="button"
-                    onClick={() => setHttpSearchQuery('')}
-                    className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer p-0.5"
+                    onClick={() => setGroupHttpByDomain(true)}
+                    className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                      groupHttpByDomain
+                        ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
                   >
-                    <X className="size-3" />
+                    {lang === 'tr' ? "Domain'e göre grupla" : 'Group by domain'}
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setGroupHttpByDomain(false)}
+                    className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                      !groupHttpByDomain
+                        ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {lang === 'tr' ? 'Düz liste' : 'Flat list'}
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -3060,127 +4185,80 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   'All public bookmarks use encrypted HTTPS. No unencrypted HTTP links found.'}
               </p>
             </div>
-          ) : (
+          ) : groupHttpByDomain ? (
             <div className="space-y-2">
-              {visibleInsecureBookmarks.map((item) => {
-                const isUpgradingThis = upgradingSingleId === item.id;
-                const pathPart = item.url.slice(7);
-                const verifyStatus = httpsVerifyMap.get(item.id);
+              {groupedInsecureDomains.slice(0, visibleHttpCount).map((domainGroup) => {
+                const isCollapsed = collapsedHttpDomains.has(domainGroup.domain);
                 return (
                   <div
-                    key={item.id}
-                    className="group border-border/50 bg-card hover:border-border rounded-lg border p-2.5 shadow-2xs transition-[border-color,background-color] duration-120"
+                    key={domainGroup.domain}
+                    className="border-border/60 bg-card overflow-hidden rounded-lg border shadow-2xs"
                   >
-                    <div className="flex items-start justify-between gap-2.5">
-                      <div className="min-w-0 flex-1 space-y-1">
-                        {/* Title & Domain & HTTPS Verification Badge */}
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <img
-                            src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=32`}
-                            alt=""
-                            className="size-3.5 shrink-0 rounded-xs"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                          <span className="text-foreground truncate text-xs font-semibold">
-                            {item.title || item.domain}
-                          </span>
-                          {verifyStatus === true && (
-                            <Badge
-                              variant="outline"
-                              className="h-4 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[8.5px] font-medium text-emerald-600 dark:text-emerald-400"
-                            >
-                              {lang === 'tr' ? '✓ HTTPS çalışıyor' : '✓ HTTPS works'}
-                            </Badge>
-                          )}
-                          {verifyStatus === false && (
-                            <Badge
-                              variant="outline"
-                              className="text-muted-foreground border-border/60 h-4 shrink-0 px-1.5 py-0 text-[8.5px]"
-                            >
-                              {lang === 'tr' ? 'HTTPS yanıt vermedi' : 'HTTPS unavailable'}
-                            </Badge>
-                          )}
-                          {item.path && (
-                            <Badge
-                              variant="outline"
-                              className="text-muted-foreground border-border/50 h-4 max-w-[130px] shrink-0 truncate px-1.5 py-0 text-[9px]"
-                              title={item.path}
-                            >
-                              📁 {formatShortFolderPath(item.path, lang)}
-                            </Badge>
-                          )}
-                        </div>
-
-                        {/* URL comparison with protocol highlight */}
-                        <div className="bg-muted/25 border-border/30 flex items-center gap-1.5 rounded border p-1.5 font-mono text-[10px] leading-relaxed break-all">
-                          <span className="rounded-xs bg-amber-500/10 px-0.5 font-semibold text-amber-600 line-through dark:text-amber-400">
-                            http://
-                          </span>
-                          <span className="text-muted-foreground truncate">{pathPart}</span>
-                          <span className="text-muted-foreground/60 shrink-0 font-sans">→</span>
-                          <span className="shrink-0 rounded-xs bg-emerald-500/10 px-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
-                            https://
-                          </span>
-                        </div>
+                    <div
+                      onClick={() => toggleHttpDomainCollapsed(domainGroup.domain)}
+                      className="bg-muted/25 border-border/40 hover:bg-muted/40 flex cursor-pointer items-center justify-between gap-2 border-b px-3 py-1.5 transition-colors"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        {isCollapsed ? (
+                          <ChevronRight className="text-muted-foreground size-3.5 shrink-0" />
+                        ) : (
+                          <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
+                        )}
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${domainGroup.domain}&sz=32`}
+                          alt=""
+                          className="size-3.5 shrink-0 rounded-xs"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                        <span className="text-foreground truncate text-xs font-semibold">
+                          {domainGroup.domain}
+                        </span>
                       </div>
 
-                      {/* Subtle Row Actions — Primary emphasis stays on top bulk button */}
-                      <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          disabled={isUpgradingThis || isUpgradingHttps}
-                          onClick={() => handleUpgradeSingleHttps(item)}
-                          className="border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50 h-6 cursor-pointer gap-1 rounded border px-1.5 text-[10px] font-medium active:scale-[0.97]"
-                          title="Upgrade this bookmark to HTTPS"
-                        >
-                          {isUpgradingThis ? (
-                            <Loader2 className="size-2.5 animate-spin" />
-                          ) : (
-                            <Lock className="size-2.5" />
-                          )}
-                          <span>{t('upgradeSingleBtn') || 'Upgrade'}</span>
-                        </Button>
-
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
-                          title={t('openInTabTooltip') || 'Open in new tab'}
-                        >
-                          <ExternalLink className="size-3" />
-                        </a>
-
-                        <button
-                          type="button"
-                          onClick={() => handleDismissInsecure(item.id)}
-                          className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
-                          title={
-                            lang === 'tr'
-                              ? 'Yoksay (HTTP olarak bırak ve listeden gizle)'
-                              : 'Ignore (Keep as HTTP and hide from list)'
-                          }
-                          aria-label="Ignore HTTP warning"
-                        >
-                          <EyeOff className="size-3" />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveInsecure(item)}
-                          className="text-muted-foreground cursor-pointer rounded p-1 transition-[color,transform] duration-120 hover:text-rose-500 active:scale-90"
-                          title="Move to Recycle Bin"
-                        >
-                          <Trash2 className="size-3" />
-                        </button>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {domainGroup.supportedCount > 0 && (
+                          <Badge
+                            variant="outline"
+                            className="h-4 border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[8.5px] font-medium text-emerald-700 dark:text-emerald-300"
+                          >
+                            {domainGroup.supportedCount} HTTPS ✓
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[9px]">
+                          {domainGroup.items.length}
+                        </Badge>
                       </div>
                     </div>
+
+                    {!isCollapsed && (
+                      <div className="divide-border/30 divide-y">
+                        {domainGroup.items.map((item) => renderHttpRowCard(item, true))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
+
+              {visibleHttpCount < groupedInsecureDomains.length && (
+                <div className="pt-1 text-center">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => setVisibleHttpCount((prev) => prev + 30)}
+                    className="h-7 cursor-pointer px-3 text-xs"
+                  >
+                    {lang === 'tr'
+                      ? `Daha fazla domain göster (${groupedInsecureDomains.length - visibleHttpCount} kaldı)`
+                      : `Show more domains (${groupedInsecureDomains.length - visibleHttpCount} remaining)`}
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {visibleInsecureBookmarks.map((item) => renderHttpRowCard(item, false))}
 
               {visibleInsecureBookmarks.length < filteredInsecureBookmarks.length && (
                 <div className="pt-1 text-center">
@@ -3478,7 +4556,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </span>
               </Button>
             </div>
-          ) : !hasScannedBroken ? (
+          ) : !hasScannedBroken && brokenLinks.length === 0 ? (
             <div className="border-border/60 bg-muted/10 flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-10 text-center">
               <Stethoscope className="text-muted-foreground/50 mb-2 size-8" />
               <p className="text-muted-foreground max-w-xs text-xs">

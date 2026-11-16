@@ -143,11 +143,19 @@ export interface TrashItem {
 }
 
 // Doctor: Duplicate link group
+export type DuplicateScope = 'library' | 'folder';
+
 export interface DuplicateGroup {
   normalizedUrl: string;
   displayUrl: string;
   domain: string;
   items: FlatBookmark[];
+  isSeparator?: boolean;
+}
+
+export interface DuplicateScanResult {
+  duplicates: DuplicateGroup[];
+  separators: DuplicateGroup[];
 }
 
 // Doctor: Similar bookmark group
@@ -156,6 +164,17 @@ export interface SimilarGroup {
   baseUrl: string;
   domain: string;
   items: FlatBookmark[];
+}
+
+// Doctor: Insecure HTTP verification status
+export type HttpsVerifyStatus = 'unverified' | 'supported' | 'unsupported' | 'redirect' | 'dead';
+
+export interface HttpsVerifyInfo {
+  status: HttpsVerifyStatus;
+  finalUrl?: string;
+  redirectDomain?: string;
+  statusCode?: number;
+  error?: string;
 }
 
 // Doctor: Tracking Parameter Cleaner
@@ -186,6 +205,7 @@ export interface BrokenLinkResult {
   status: LinkHealthStatus;
   statusCode?: number;
   error?: string;
+  finalUrl?: string;
   checkedAt: number;
 }
 
