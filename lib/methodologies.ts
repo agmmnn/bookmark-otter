@@ -124,7 +124,7 @@ export const METHODOLOGY_PRESETS: MethodologyPreset[] = [
       tr: 'Tüketim ile üretimi birbirinden ayırmak isteyenler',
       en: 'Users wanting clear boundaries between consuming & building',
     },
-    structure: ['🛠️ Üret (Build)', '📖 Oku (Read)', '🎓 Öğren (Learn)', '🛒 Satın Al (Buy)'],
+    structure: ['🛠️ Build', '📖 Read', '🎓 Learn', '🛒 Buy'],
     prompt: {
       tr: 'Klasörlerimi fiil odaklı (verb-based) eylemlere göre düzenle: 🛠️ Üret (araçlar, kod, sandbox), 📖 Oku (makaleler, dokümantasyon), 🎓 Öğren (kurslar, rehberler), 🛒 Satın Al (istek listesi, ürünler).',
       en: 'Organize into verb-based action containers: 🛠️ Build (dev tools & utilities), 📖 Read (articles & docs), 🎓 Learn (courses & guides), 🛒 Buy (wishlist & products).',
