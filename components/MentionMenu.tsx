@@ -2,6 +2,7 @@ import { Folder, Globe, AtSign } from 'lucide-react';
 import React, { useEffect, useRef } from 'react';
 
 import { Badge } from '@/components/ui/badge';
+import { formatFolderTitle } from '@/lib/utils';
 
 export interface MentionItem {
   id: string;
@@ -39,27 +40,25 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({
 
   if (items.length === 0) {
     return (
-      <div className="border-border/80 bg-popover/95 text-muted-foreground animate-in fade-in-0 zoom-in-95 absolute right-0 bottom-full left-0 z-50 mb-1.5 rounded-lg border p-3 text-center text-xs shadow-lg backdrop-blur-md duration-100">
+      <div className="border-border/80 bg-popover/98 text-muted-foreground animate-in fade-in-0 zoom-in-95 absolute top-full right-0 left-0 z-50 mt-1.5 rounded-lg border p-3 text-center text-xs shadow-lg backdrop-blur-md duration-100">
         No folders or bookmarks match this mention.
       </div>
     );
   }
 
   return (
-    <div className="border-border/80 bg-popover/95 animate-in fade-in-0 zoom-in-95 absolute right-0 bottom-full left-0 z-50 mb-1.5 overflow-hidden rounded-xl border text-xs shadow-xl backdrop-blur-md transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]">
+    <div className="border-border/80 bg-popover/98 animate-in fade-in-0 zoom-in-95 absolute top-full right-0 left-0 z-50 mt-1.5 overflow-hidden rounded-xl border text-xs shadow-xl backdrop-blur-md transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]">
       {/* Menu Header hint */}
-      <div className="bg-muted/30 border-border/50 text-muted-foreground flex items-center justify-between border-b px-2.5 py-1.5 text-[10.5px] select-none">
-        <span className="text-foreground/80 flex items-center gap-1 font-medium">
+      <div className="bg-muted/30 border-border/50 text-muted-foreground flex items-center justify-between gap-2 border-b px-2.5 py-1.5 text-[10.5px] select-none">
+        <span className="text-foreground/80 flex shrink-0 items-center gap-1 font-medium">
           <AtSign className="text-primary size-3" />
           Mention Target
         </span>
-        <span className="font-mono text-[9px] opacity-75">
-          ↑↓ Navigate · Enter Select · Esc Cancel
-        </span>
+        <span className="truncate font-mono text-[9px] opacity-75">↑↓ · Enter · Esc</span>
       </div>
 
       {/* Items List */}
-      <div ref={listRef} className="divide-border/20 max-h-48 divide-y overflow-y-auto p-1">
+      <div ref={listRef} className="divide-border/20 max-h-56 divide-y overflow-y-auto p-1">
         {items.map((item, idx) => {
           const isSelected = idx === selectedIndex;
           const isFolder = item.type === 'folder';
@@ -67,6 +66,8 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({
           const faviconUrl = item.url
             ? `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(item.url)}&sz=32`
             : null;
+
+          const displayTitle = isFolder ? formatFolderTitle(item.title, item.path) : item.title;
 
           return (
             <div
@@ -80,6 +81,7 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({
                   ? 'bg-primary/15 text-foreground font-medium'
                   : 'hover:bg-muted/40 text-foreground/90'
               }`}
+              title={item.path || item.url || item.title}
             >
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 {/* Icon */}
@@ -99,7 +101,7 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({
                 )}
 
                 {/* Title */}
-                <span className="truncate text-xs">{item.title}</span>
+                <span className="truncate text-xs">{displayTitle}</span>
 
                 {/* Domain or Path */}
                 {item.domain && (
