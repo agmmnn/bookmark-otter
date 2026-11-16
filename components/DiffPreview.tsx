@@ -23,7 +23,11 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useI18n } from '@/lib/i18n';
+import { formatMiddleFolderPath } from '@/lib/utils';
 import type { ReorgAction, ReorgPlan, FlatBookmark, FlatFolder } from '@/types';
+
+const STARTS_WITH_EMOJI_REGEX = /^\p{Extended_Pictographic}/u;
+const STRIP_LEADING_EMOJI_REGEX = /^[\p{Extended_Pictographic}\uFE0F\u200D\s]+/u;
 
 interface DiffPreviewProps {
   plan: ReorgPlan;
@@ -66,7 +70,12 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
   scopeType,
   targetedNames,
 }) => {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+
+  // Filter state for header pills
+  const [activeFilter, setActiveFilter] = useState<
+    'all' | 'moves' | 'new_folders' | 'renames' | 'removes'
+  >('all');
 
   // Initially select all actions
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
@@ -267,69 +276,47 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
     onApply(selected);
   };
 
-  return (
-    <div className="bg-card border-border/80 animate-in fade-in-0 zoom-in-95 flex h-full flex-col overflow-hidden rounded-xl border shadow-xs transition-all duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]">
-      {/* Plan Header */}
-      <div className="bg-muted/30 border-border/70 space-y-1.5 border-b p-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-foreground flex items-center gap-1.5 text-xs font-semibold tracking-tight">
-              <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
-              {t('diffTitle')}
-            </span>
+  const visibleFolderGroups = useMemo(() => {
+    if (activeFilter === 'renames' || activeFilter === 'removes') return [];
+    if (activeFilter === 'new_folders') return folderGroups.filter((g) => g.isNewFolder);
+    if (activeFilter === 'moves') return folderGroups.filter((g) => g.moves.length > 0);
+    return folderGroups;
+  }, [folderGroups, activeFilter]);
 
-            {/* Quick Stat Badges */}
-            <div className="flex flex-wrap items-center gap-1">
+  const showRenames = activeFilter === 'all' || activeFilter === 'renames';
+  const showRemoves = activeFilter === 'all' || activeFilter === 'removes';
+
+  return (
+    <div className="bg-card border-border/80 animate-in fade-in-0 zoom-in-95 flex max-h-[calc(100vh-145px)] min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-xs transition-all duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]">
+      {/* Plan Header */}
+      <div className="bg-muted/30 border-border/70 space-y-2 border-b p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 space-y-0.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-foreground flex items-center gap-1.5 text-xs font-semibold tracking-tight">
+                <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
+                {t('diffTitle')}
+              </span>
               {scopeType === 'targeted' && targetedNames && targetedNames.length > 0 && (
                 <Badge
                   variant="outline"
-                  className="h-4 border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600 dark:text-amber-400"
+                  className="h-4 max-w-[180px] truncate border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600 dark:text-amber-400"
+                  title={targetedNames.join(', ')}
                 >
                   🎯 {targetedNames.join(', ')}
                 </Badge>
               )}
-              {totalBookmarksCount && totalBookmarksCount > 0 && (
-                <Badge
-                  variant="outline"
-                  className="text-muted-foreground border-border h-4 px-1.5 py-0 text-[9px] font-normal"
-                >
-                  {totalBookmarksCount} {t('itemsLabel') || 'items'} analyzed
-                </Badge>
-              )}
-              <Badge
-                variant="secondary"
-                className="border-primary/20 bg-primary/10 text-primary h-4 px-1.5 py-0 text-[9px] font-medium"
-              >
-                {t('planStatsActions', { count: plan.actions.length })}
-              </Badge>
-              {moveCount > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="h-4 border-blue-500/20 bg-blue-500/10 px-1.5 py-0 text-[9px] font-medium text-blue-600 dark:text-blue-400"
-                >
-                  {t('planStatsMoves', { count: moveCount })}
-                </Badge>
-              )}
-              {newFolderCount > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="h-4 border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0 text-[9px] font-medium text-emerald-600 dark:text-emerald-400"
-                >
-                  {t('planStatsFolders', { count: newFolderCount })}
-                </Badge>
-              )}
-              {removes.length > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="h-4 border-rose-500/20 bg-rose-500/10 px-1.5 py-0 text-[9px] font-medium text-rose-600 dark:text-rose-400"
-                >
-                  {t('planStatsRemoves', { count: removes.length })}
-                </Badge>
-              )}
             </div>
+            {totalBookmarksCount && totalBookmarksCount > 0 && (
+              <p className="text-muted-foreground text-[10px]">
+                {lang === 'tr'
+                  ? `${totalBookmarksCount} öğe analiz edildi`
+                  : `${totalBookmarksCount} items analyzed`}
+              </p>
+            )}
           </div>
 
-          <div className="flex items-center gap-2 select-none">
+          <div className="flex shrink-0 items-center gap-2 select-none">
             {/* Raw JSON Debug Inspector Button */}
             <button
               onClick={() => setIsRawModalOpen(true)}
@@ -358,13 +345,95 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
           </div>
         </div>
 
+        {/* Interactive Filter Tabs (replaces noisy static multi-row badges) */}
+        <div className="flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setActiveFilter('all')}
+            className={`cursor-pointer rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              activeFilter === 'all'
+                ? 'border-primary/40 bg-primary/10 text-primary font-semibold'
+                : 'border-border/60 bg-background/60 text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {lang === 'tr' ? `Tümü (${plan.actions.length})` : `All (${plan.actions.length})`}
+          </button>
+
+          {moveCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveFilter(activeFilter === 'moves' ? 'all' : 'moves')}
+              className={`cursor-pointer rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                activeFilter === 'moves'
+                  ? 'border-blue-500/40 bg-blue-500/15 font-semibold text-blue-600 dark:text-blue-400'
+                  : 'border-border/60 bg-background/60 text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {lang === 'tr' ? `Taşıma (${moveCount})` : `Moves (${moveCount})`}
+            </button>
+          )}
+
+          {newFolderCount > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setActiveFilter(activeFilter === 'new_folders' ? 'all' : 'new_folders')
+              }
+              className={`cursor-pointer rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                activeFilter === 'new_folders'
+                  ? 'border-emerald-500/40 bg-emerald-500/15 font-semibold text-emerald-600 dark:text-emerald-400'
+                  : 'border-border/60 bg-background/60 text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {lang === 'tr'
+                ? `Yeni Klasör (${newFolderCount})`
+                : `${newFolderCount === 1 ? 'New Folder' : 'New Folders'} (${newFolderCount})`}
+            </button>
+          )}
+
+          {renames.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveFilter(activeFilter === 'renames' ? 'all' : 'renames')}
+              className={`cursor-pointer rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                activeFilter === 'renames'
+                  ? 'border-amber-500/40 bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400'
+                  : 'border-border/60 bg-background/60 text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {lang === 'tr'
+                ? `Yeniden Adlandır (${renames.length})`
+                : `Renames (${renames.length})`}
+            </button>
+          )}
+
+          {removes.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveFilter(activeFilter === 'removes' ? 'all' : 'removes')}
+              className={`cursor-pointer rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                activeFilter === 'removes'
+                  ? 'border-rose-500/50 bg-rose-500/15 font-semibold text-rose-600 dark:text-rose-400'
+                  : 'border-rose-500/30 bg-rose-500/10 text-rose-600 hover:bg-rose-500/15 dark:text-rose-400'
+              }`}
+              title={
+                lang === 'tr'
+                  ? 'Silinecek öğeleri incelemek için tıklayın'
+                  : 'Click to inspect items marked for removal'
+              }
+            >
+              {lang === 'tr' ? `Silinecek (${removes.length})` : `Removes (${removes.length})`}
+            </button>
+          )}
+        </div>
+
         <p className="text-muted-foreground text-[11px] leading-relaxed">{plan.summary}</p>
       </div>
 
-      {/* Hierarchical Action Groups */}
-      <div className="max-h-[380px] flex-1 space-y-2 overflow-y-auto p-2.5 text-xs">
+      {/* Hierarchical Action Groups — flexible height with single clean scroll */}
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5 text-xs">
         {/* 1. Folder Groups */}
-        {folderGroups.map((group) => {
+        {visibleFolderGroups.map((group) => {
           const isCollapsed = collapsedFolderKeys.has(group.key);
           const allGroupIndices: number[] = [];
           if (group.createActionIndex !== undefined) {
@@ -376,6 +445,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
           const isFullySelected =
             allGroupIndices.length > 0 && selectedCount === allGroupIndices.length;
           const isPartiallySelected = selectedCount > 0 && selectedCount < allGroupIndices.length;
+          const titleHasLeadingEmoji = STARTS_WITH_EMOJI_REGEX.test(group.title.trim());
 
           return (
             <div
@@ -403,12 +473,13 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
                     )}
                   </div>
 
-                  {/* Folder Icon */}
-                  {group.isNewFolder ? (
-                    <FolderPlus className="size-3.5 shrink-0 text-emerald-500" />
-                  ) : (
-                    <Folder className="size-3.5 shrink-0 text-amber-500" />
-                  )}
+                  {/* Folder Icon (skip when title already starts with an emoji to avoid double icon) */}
+                  {!titleHasLeadingEmoji &&
+                    (group.isNewFolder ? (
+                      <FolderPlus className="size-3.5 shrink-0 text-emerald-500" />
+                    ) : (
+                      <Folder className="size-3.5 shrink-0 text-amber-500" />
+                    ))}
 
                   {/* Folder Title */}
                   <span className="text-foreground truncate text-xs font-semibold">
@@ -463,6 +534,20 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
                         )}&sz=32`
                       : null;
 
+                    // Suppress redundant reason when LLM repeats the destination folder name
+                    const normalizedGroup = group.title
+                      .replace(STRIP_LEADING_EMOJI_REGEX, '')
+                      .trim()
+                      .toLowerCase();
+                    const normalizedReason = (moveItem.reason || '')
+                      .replace(STRIP_LEADING_EMOJI_REGEX, '')
+                      .trim()
+                      .toLowerCase();
+                    const hasDistinctReason =
+                      Boolean(moveItem.reason) &&
+                      normalizedReason !== normalizedGroup &&
+                      moveItem.reason!.trim().toLowerCase() !== group.title.trim().toLowerCase();
+
                     return (
                       <div
                         key={moveItem.actionIndex}
@@ -498,33 +583,30 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
                           <Globe className="text-muted-foreground size-3.5 shrink-0" />
                         )}
 
-                        {/* Title & Domain & Before ➔ After indicator */}
+                        {/* Title & Domain & concise Source Path (no duplicate target repetition) */}
                         <div className="flex min-w-0 flex-1 flex-col py-0.5">
                           <div className="flex min-w-0 items-baseline gap-1.5">
                             <span className="text-foreground truncate text-[11.5px] font-medium">
                               {moveItem.bookmarkTitle}
                             </span>
                             {moveItem.domain && (
-                              <span className="text-muted-foreground/70 max-w-[120px] truncate font-mono text-[9px]">
+                              <span className="text-muted-foreground/70 max-w-[120px] shrink-0 truncate font-mono text-[9px]">
                                 {moveItem.domain}
                               </span>
                             )}
                           </div>
-                          {/* Before ➔ After & Reason */}
                           <div className="text-muted-foreground/80 flex items-center gap-1.5 truncate text-[9.5px]">
                             {moveItem.sourcePath && (
-                              <span className="text-muted-foreground/60 max-w-[140px] truncate line-through">
-                                {moveItem.sourcePath}
+                              <span
+                                className="text-muted-foreground/75 truncate"
+                                title={moveItem.sourcePath}
+                              >
+                                {lang === 'tr' ? 'Kaynak: ' : 'From '}
+                                {formatMiddleFolderPath(moveItem.sourcePath, lang)}
                               </span>
                             )}
-                            {moveItem.sourcePath && (
-                              <span className="text-muted-foreground/40 shrink-0">➔</span>
-                            )}
-                            <span className="text-foreground/90 max-w-[140px] truncate font-medium">
-                              {group.title}
-                            </span>
-                            {moveItem.reason && (
-                              <span className="text-primary/75 max-w-[180px] shrink-0 truncate italic">
+                            {hasDistinctReason && (
+                              <span className="text-primary/75 truncate italic">
                                 • {moveItem.reason}
                               </span>
                             )}
@@ -540,7 +622,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
         })}
 
         {/* 2. Renames Section */}
-        {renames.length > 0 && (
+        {showRenames && renames.length > 0 && (
           <div className="border-border/70 bg-card overflow-hidden rounded-xl border shadow-2xs">
             <div className="bg-muted/25 text-foreground flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold">
               <Edit3 className="size-3 text-amber-500" />
@@ -585,7 +667,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
         )}
 
         {/* 3. Removes Section */}
-        {removes.length > 0 && (
+        {showRemoves && removes.length > 0 && (
           <div className="border-border/70 bg-card overflow-hidden rounded-xl border shadow-2xs">
             <div className="bg-muted/25 text-destructive flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold">
               <Trash2 className="size-3" />

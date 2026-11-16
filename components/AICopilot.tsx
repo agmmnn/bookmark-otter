@@ -13,6 +13,7 @@ import {
   Compass,
   Search,
   X,
+  Square,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
@@ -79,6 +80,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
 
   // Mention State (@ target specification)
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const planAbortRef = useRef<AbortController | null>(null);
   const [availableFolders, setAvailableFolders] = useState<FlatFolder[]>([]);
   const [availableBookmarks, setAvailableBookmarks] = useState<FlatBookmark[]>([]);
   const [recentSnapshots, setRecentSnapshots] = useState<TreeSnapshot[]>([]);
@@ -337,22 +339,35 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         });
       }
 
+      const controller = new AbortController();
+      planAbortRef.current = controller;
+
       const plan = await generatePlanViaBackground({
         userPrompt: effectivePrompt,
         tree,
         compactTreeDSL: smartDsl.dsl,
         useHarness,
+        signal: controller.signal,
         onProgress: useHarness ? (p) => setAgentProgress(p) : undefined,
       });
 
       setCurrentPlan(plan);
     } catch (err: any) {
-      console.error('Plan generation failed:', err);
-      setError(err?.message || 'Plan generation failed.');
+      if (err?.name === 'AbortError') {
+        toast.info(lang === 'tr' ? 'Plan oluşturma durduruldu' : 'Plan generation stopped');
+      } else {
+        console.error('Plan generation failed:', err);
+        setError(err?.message || 'Plan generation failed.');
+      }
     } finally {
+      planAbortRef.current = null;
       setIsLoading(false);
       setAgentProgress(null);
     }
+  };
+
+  const handleStopGeneration = () => {
+    planAbortRef.current?.abort();
   };
 
   const handleApplyPlan = async (selectedActions: ReorgAction[]) => {
@@ -499,14 +514,12 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Wand2 className="text-primary size-3.5 shrink-0" />
             <span className="text-foreground truncate text-xs font-medium">
-              &quot;
               {promptText.trim() ||
                 (activeMethodology
                   ? lang === 'tr'
                     ? activeMethodology.name.tr
                     : activeMethodology.name.en
                   : '')}
-              &quot;
             </span>
           </div>
           <Button
@@ -571,18 +584,18 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       {/* Real-time Agent Harness Progress Card */}
       {isLoading && (
         <div className="border-border/70 from-card via-card to-primary/5 animate-in fade-in-0 zoom-in-95 space-y-2 rounded-xl border bg-gradient-to-br p-3 shadow-xs duration-200">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="bg-primary/10 text-primary flex size-7 items-center justify-center rounded-lg">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="bg-primary/10 text-primary flex size-7 shrink-0 items-center justify-center rounded-lg">
                 <Sparkles className="size-4 animate-spin duration-1000" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="text-foreground text-xs font-semibold">
                     {agentProgress ? t('agentHarnessBadge') : t('copilotBadge')}
                   </span>
                   {agentProgress && (
-                    <span className="bg-primary/10 text-primary border-primary/20 py-0.2 rounded border px-1.5 font-mono text-[9px] font-medium">
+                    <span className="bg-primary/10 text-primary border-primary/20 py-0.2 truncate rounded border px-1.5 font-mono text-[9px] font-medium">
                       {agentProgress.phase === 'architect'
                         ? t('agentPhaseArchitect')
                         : agentProgress.phase === 'routing'
@@ -601,11 +614,24 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                 </p>
               </div>
             </div>
-            {agentProgress?.percentage !== undefined && (
-              <span className="text-primary font-mono text-xs font-bold">
-                %{agentProgress.percentage}
-              </span>
-            )}
+
+            <div className="flex shrink-0 items-center gap-2">
+              {agentProgress?.percentage !== undefined && (
+                <span className="text-primary font-mono text-xs font-bold">
+                  {lang === 'tr' ? `%${agentProgress.percentage}` : `${agentProgress.percentage}%`}
+                </span>
+              )}
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleStopGeneration}
+                className="border-border/70 text-muted-foreground hover:text-destructive hover:border-destructive/40 h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-95"
+                title={t('stopScanBtn') || (lang === 'tr' ? 'Durdur' : 'Stop')}
+              >
+                <Square className="size-2.5 fill-current" />
+                <span>{t('stopScanBtn') || (lang === 'tr' ? 'Durdur' : 'Stop')}</span>
+              </Button>
+            </div>
           </div>
 
           {/* Animated Progress Bar */}

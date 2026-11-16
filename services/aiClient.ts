@@ -84,21 +84,37 @@ export async function suggestForNewBookmarkViaBackground(
 export function generatePlanViaBackground(
   params: GeneratePlanRequest & {
     onProgress?: (progress: AgentProgress) => void;
+    signal?: AbortSignal;
   }
 ): Promise<ReorgPlan> {
-  const { onProgress, ...payload } = params;
+  const { onProgress, signal, ...payload } = params;
 
   return new Promise<ReorgPlan>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Plan generation aborted by user.', 'AbortError'));
+      return;
+    }
+
     const port = browser.runtime.connect({ name: 'ai-copilot-plan' });
     let settled = false;
 
     const cleanup = () => {
+      signal?.removeEventListener('abort', handleAbort);
       try {
         port.disconnect();
       } catch {
         // Ignore if already disconnected
       }
     };
+
+    const handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new DOMException('Plan generation aborted by user.', 'AbortError'));
+    };
+
+    signal?.addEventListener('abort', handleAbort);
 
     port.onMessage.addListener((rawMsg: unknown) => {
       const msg = rawMsg as AiPortMessage;
@@ -122,6 +138,7 @@ export function generatePlanViaBackground(
     port.onDisconnect.addListener(() => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', handleAbort);
       const errMsg =
         (browser.runtime as any)?.lastError?.message ||
         'Background AI worker disconnected before plan completed.';
