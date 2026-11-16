@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 Initial public release prepared for Chrome Web Store (`chrome-mv3`), with cross-browser builds for `firefox-mv2` and `safari-mv2`.
 
 ### Added
+
 - **4-Tab Container-Responsive Navigation:** Streamlined main bar (`Inbox`, `Library`, `Copilot`, `Doctor`) with 3-stage `container-type: inline-size` adaptation (full labels → active-only label → icon-only) and header **Recycle Bin** & **Settings** full-page views with Back navigation.
 - **Inbox (`RecentBookmarks`):**
   - Default landing view for triaging unorganized recent bookmarks.

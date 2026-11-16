@@ -390,7 +390,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                       className={`border-border mt-0.5 size-3.5 shrink-0 cursor-pointer rounded accent-amber-600 transition-opacity ${
                         isSelected
                           ? 'opacity-100'
-                          : 'opacity-50 group-hover:opacity-100 focus:opacity-100'
+                          : 'opacity-85 group-hover:opacity-100 focus:opacity-100'
                       }`}
                     />
 

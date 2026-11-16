@@ -39,8 +39,11 @@ export function applyTheme(theme: Theme): boolean {
     root.classList.remove('dark');
   }
 
+  const resolvedScheme = isDark ? 'dark' : 'light';
+  root.style.colorScheme = resolvedScheme;
+
   if (meta) {
-    meta.setAttribute('content', theme === 'system' ? 'light dark' : theme);
+    meta.setAttribute('content', resolvedScheme);
   }
 
   return isDark;
