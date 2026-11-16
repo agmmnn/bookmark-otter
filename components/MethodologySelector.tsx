@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronUp, Sparkles, BookOpen } from 'lucide-react';
-import React, { useState } from 'react';
+import { ChevronDown, ChevronUp, Compass, BookOpen, Check, X } from 'lucide-react';
+import React from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,73 +7,78 @@ import { METHODOLOGY_PRESETS, type MethodologyPreset } from '@/lib/methodologies
 
 interface MethodologySelectorProps {
   lang: 'tr' | 'en';
-  onSelectMethodology: (preset: MethodologyPreset) => void;
+  onSelectMethodology: (preset: MethodologyPreset | null) => void;
   activeMethodologyId?: string | null;
+  isOpen: boolean;
+  onToggleOpen: () => void;
 }
 
 export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
   lang,
   onSelectMethodology,
   activeMethodologyId,
+  isOpen,
+  onToggleOpen,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
   const isTr = lang === 'tr';
+  const activePreset = METHODOLOGY_PRESETS.find((p) => p.id === activeMethodologyId) || null;
 
   return (
-    <div className="border-border/60 bg-muted/20 rounded-lg border p-2">
-      {/* Header with expand/collapse toggle */}
+    <div className="border-border/60 bg-muted/15 rounded-lg border p-2">
+      {/* Header with expand/collapse toggle — collapsed by default (no chips exposed) */}
       <button
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full cursor-pointer items-center justify-between text-left transition-colors"
+        onClick={onToggleOpen}
+        aria-expanded={isOpen}
+        className="flex w-full cursor-pointer items-center justify-between gap-2 text-left transition-colors"
       >
-        <div className="flex items-center gap-1.5">
-          <Sparkles className="text-primary size-3.5" />
-          <span className="text-foreground/90 text-xs font-semibold">
-            {isTr ? 'Organizasyon Metotları & Stiller' : 'Architecture Methodologies'}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Compass className="text-primary size-3.5 shrink-0" />
+          <span className="text-foreground/90 truncate text-[11px] font-semibold">
+            {isTr ? 'Metodoloji Şablonları' : 'Architecture Methodologies'}
           </span>
-          <Badge variant="outline" className="h-4 px-1.5 text-[9px]">
-            {METHODOLOGY_PRESETS.length}
-          </Badge>
+          {activePreset ? (
+            <Badge
+              variant="secondary"
+              className="bg-primary/15 text-primary h-4 shrink-0 gap-1 px-1.5 text-[9px] font-medium"
+            >
+              <span>{activePreset.icon}</span>
+              <span className="max-w-[100px] truncate">
+                {isTr ? activePreset.name.tr : activePreset.name.en}
+              </span>
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-[9px]">
+              {METHODOLOGY_PRESETS.length}
+            </Badge>
+          )}
         </div>
-        <div className="text-muted-foreground flex items-center gap-1 text-[10px]">
-          <span>{isOpen ? (isTr ? 'Daralt' : 'Collapse') : isTr ? 'İncele' : 'Explore'}</span>
+        <div className="text-muted-foreground flex shrink-0 items-center gap-1 text-[10px]">
+          <span>{isOpen ? (isTr ? 'Gizle' : 'Hide') : isTr ? 'İncele' : 'Explore'}</span>
           {isOpen ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
         </div>
       </button>
 
-      {/* Wrapped pills when collapsed so nothing is horizontally clipped */}
-      {!isOpen && (
-        <div className="mt-1.5 flex flex-wrap gap-1 pt-0.5">
-          {METHODOLOGY_PRESETS.map((preset) => {
-            const isSelected = activeMethodologyId === preset.id;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => onSelectMethodology(preset)}
-                className={`flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] transition-all duration-120 active:scale-95 ${
-                  isSelected
-                    ? 'border-primary/60 bg-primary/10 text-primary font-medium'
-                    : 'border-border/60 bg-background/80 text-muted-foreground hover:border-border hover:text-foreground'
-                }`}
-              >
-                <span>{preset.icon}</span>
-                <span>{isTr ? preset.name.tr : preset.name.en}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Expanded detailed cards */}
+      {/* Expanded detailed preset cards (only rendered when opened) */}
       {isOpen && (
         <div className="border-border/40 mt-2 space-y-2 border-t pt-2">
-          <p className="text-muted-foreground/80 px-0.5 text-[10.5px]">
-            {isTr
-              ? 'Yer imi kütüphanenizi dünyaca kabul görmüş bilgi mimarisi felsefelerinden biriyle yapılandırın:'
-              : 'Structure your bookmark library using battle-tested personal knowledge management (PKM) frameworks:'}
-          </p>
+          <div className="flex items-center justify-between gap-2 px-0.5">
+            <p className="text-muted-foreground/85 text-[10px]">
+              {isTr
+                ? 'İsteğinize uygulanacak klasör mimarisi stilini (Preset) seçin:'
+                : 'Choose an architecture style preset to combine with your request:'}
+            </p>
+            {activePreset && (
+              <button
+                type="button"
+                onClick={() => onSelectMethodology(null)}
+                className="text-muted-foreground hover:text-foreground flex shrink-0 cursor-pointer items-center gap-0.5 text-[9.5px] underline"
+              >
+                <X className="size-2.5" />
+                {isTr ? 'Temizle' : 'Clear'}
+              </button>
+            )}
+          </div>
 
           <div className="grid gap-1.5">
             {METHODOLOGY_PRESETS.map((preset) => {
@@ -85,7 +90,7 @@ export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
               return (
                 <div
                   key={preset.id}
-                  onClick={() => onSelectMethodology(preset)}
+                  onClick={() => onSelectMethodology(isSelected ? null : preset)}
                   className={`group relative cursor-pointer rounded-md border p-2 transition-all duration-150 ${
                     isSelected
                       ? 'border-primary bg-primary/5 shadow-xs'
@@ -101,13 +106,14 @@ export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
                     <Button
                       size="sm"
                       variant={isSelected ? 'default' : 'secondary'}
-                      className="h-5 px-2 text-[10px] font-medium"
+                      className="h-5 gap-1 px-2 text-[10px] font-medium"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSelectMethodology(preset);
+                        onSelectMethodology(isSelected ? null : preset);
                       }}
                     >
-                      {isSelected ? (isTr ? 'Seçildi' : 'Selected') : isTr ? 'Kullan' : 'Use'}
+                      {isSelected && <Check className="size-2.5" />}
+                      {isSelected ? (isTr ? 'Aktif Preset' : 'Active') : isTr ? 'Seç' : 'Use'}
                     </Button>
                   </div>
 

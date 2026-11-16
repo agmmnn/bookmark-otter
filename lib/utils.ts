@@ -28,7 +28,7 @@ export function formatFolderTitle(title?: string, path?: string, lang: 'en' | 't
       .map((p) => p.trim())
       .filter((p) => p && p !== 'Root' && p !== trimmed && !isEmojiOnlyTitle(p));
     const parentHint = parts.length > 0 ? parts[parts.length - 1] : untitled;
-    return `${trimmed} (${parentHint})`;
+    return `${trimmed} · ${parentHint}`;
   }
 
   return trimmed;

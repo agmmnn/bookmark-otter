@@ -4,22 +4,25 @@ import {
   Wand2,
   CheckCircle2,
   AlertCircle,
-  CornerDownLeft,
   Edit2,
   AtSign,
   Sparkles,
   RotateCcw,
   History,
   Folder,
-  Bookmark,
+  Compass,
+  Search,
+  X,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/lib/i18n';
-import { formatFolderTitle } from '@/lib/utils';
+import { METHODOLOGY_PRESETS } from '@/lib/methodologies';
+import { formatFolderTitle, isEmojiOnlyTitle } from '@/lib/utils';
 import { generatePlanViaBackground, shouldUseAgentHarness } from '@/services/aiClient';
 import {
   getBookmarkTree,
@@ -64,6 +67,10 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   const [scopeType, setScopeType] = useState<'targeted' | 'clustered' | 'full'>('full');
   const [targetedNames, setTargetedNames] = useState<string[]>([]);
   const [activeMethodologyId, setActiveMethodologyId] = useState<string | null>(null);
+  const [isMethodologiesOpen, setIsMethodologiesOpen] = useState(false);
+  const [showAllRecipes, setShowAllRecipes] = useState(false);
+  const [folderSearchQuery, setFolderSearchQuery] = useState('');
+  const [showAllMentionFolders, setShowAllMentionFolders] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [appliedSuccess, setAppliedSuccess] = useState<{
     count: number;
@@ -245,8 +252,30 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
     }, 10);
   };
 
-  const handleGeneratePlan = async (userPrompt: string) => {
-    if (!userPrompt.trim()) return;
+  const activeMethodology = useMemo(
+    () => METHODOLOGY_PRESETS.find((p) => p.id === activeMethodologyId) || null,
+    [activeMethodologyId]
+  );
+
+  const canSubmit = Boolean(promptText.trim() || activeMethodology);
+
+  const handleGeneratePlan = async (rawPrompt: string) => {
+    const trimmed = rawPrompt.trim();
+    const methodologyRule = activeMethodology
+      ? lang === 'tr'
+        ? activeMethodology.prompt.tr
+        : activeMethodology.prompt.en
+      : '';
+
+    const effectivePrompt = trimmed
+      ? methodologyRule
+        ? `${trimmed}\n\n[Architecture Preset: ${
+            lang === 'tr' ? activeMethodology!.name.tr : activeMethodology!.name.en
+          }] ${methodologyRule}`
+        : trimmed
+      : methodologyRule;
+
+    if (!effectivePrompt.trim()) return;
     setIsLoading(true);
     setError(null);
     setAppliedSuccess(null);
@@ -279,13 +308,13 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       }
       setFolderMap(fMap);
 
-      const smartDsl = getSmartTreeDSL(tree, userPrompt);
+      const smartDsl = getSmartTreeDSL(tree, effectivePrompt);
       setAnalyzedCount(smartDsl.analyzedCount);
       setScopeType(smartDsl.scopeType);
       setTargetedNames(smartDsl.targetFolderNames || []);
 
       // 2. Select execution mode: Multi-Step Agent Harness (for global library) or Scoped Single-Shot
-      const useHarness = shouldUseAgentHarness(userPrompt, flats.length, smartDsl.scopeType);
+      const useHarness = shouldUseAgentHarness(effectivePrompt, flats.length, smartDsl.scopeType);
       if (useHarness) {
         setAgentProgress({
           phase: 'architect',
@@ -298,7 +327,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       }
 
       const plan = await generatePlanViaBackground({
-        userPrompt,
+        userPrompt: effectivePrompt,
         tree,
         compactTreeDSL: smartDsl.dsl,
         useHarness,
@@ -342,31 +371,127 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
     }
   };
 
+  const recipes = useMemo(
+    () =>
+      lang === 'tr'
+        ? [
+            {
+              icon: '⚡',
+              label: 'Kütüphaneyi düzenle',
+              prompt:
+                'Tüm yer imlerimi analiz et ve 6-8 ana tematik klasör altında baştan sona düzenle.',
+            },
+            {
+              icon: '🎯',
+              label: 'Favicon Launchpad',
+              prompt:
+                'Yer İmleri Çubuğundaki doğrudan web araçlarının başlıklarını temizle, yalnızca favicon ikonları bırak.',
+            },
+            {
+              icon: '🧹',
+              label: 'Dağınıkları toparla',
+              prompt: 'Yer İmleri Çubuğundaki dağınık tüm yer imlerini kategorik klasörlere taşı.',
+            },
+            {
+              icon: '🛡️',
+              label: 'Klasörü koru',
+              prompt: 'Dağınıkları düzenle ama @"needfix" klasörüne asla dokunma.',
+            },
+            {
+              icon: '🏷️',
+              label: 'Başlıkları sadeleştir',
+              prompt:
+                'Gereksiz uzun veya URL şeklindeki yer imi başlıklarını temiz ve tanınabilir yap.',
+            },
+            {
+              icon: '📁',
+              label: 'Klasörleri birleştir',
+              prompt: 'Benzer konudaki dağınık alt klasörleri ana başlıklar altında birleştir.',
+            },
+          ]
+        : [
+            {
+              icon: '⚡',
+              label: 'Organize library',
+              prompt:
+                'Analyze all bookmarks and reorganize the entire library into cohesive thematic folders.',
+            },
+            {
+              icon: '🎯',
+              label: 'Favicon Launchpad',
+              prompt:
+                'Strip text titles of direct bookmarks bar web apps, leaving only clean favicon icons.',
+            },
+            {
+              icon: '🧹',
+              label: 'Triage loose',
+              prompt:
+                'Organize unfiled and loose bookmarks on the Bookmarks Bar into structured folders.',
+            },
+            {
+              icon: '🛡️',
+              label: 'Protect folder',
+              prompt: 'Organize loose bookmarks but do not touch @"needfix".',
+            },
+            {
+              icon: '🏷️',
+              label: 'Clean titles',
+              prompt:
+                'Simplify and shorten verbose or raw URL bookmark titles into clean, recognizable names.',
+            },
+            {
+              icon: '📁',
+              label: 'Merge folders',
+              prompt: 'Merge scattered single-topic folders into cohesive thematic parent folders.',
+            },
+          ],
+    [lang]
+  );
+
+  const mentionableFolders = useMemo(() => {
+    const q = folderSearchQuery.trim().toLowerCase();
+    return availableFolders.filter((f) => {
+      if (f.id === '1' || f.id === '2') return false;
+      if (!q) return true;
+      return f.title.toLowerCase().includes(q) || f.path.toLowerCase().includes(q);
+    });
+  }, [availableFolders, folderSearchQuery]);
+
+  const visibleMentionFolders = useMemo(
+    () => (showAllMentionFolders ? mentionableFolders : mentionableFolders.slice(0, 10)),
+    [mentionableFolders, showAllMentionFolders]
+  );
+
+  const remainingFolderCount = Math.max(
+    0,
+    mentionableFolders.length - visibleMentionFolders.length
+  );
+
   return (
-    <div className="flex h-full flex-col space-y-3 p-3">
-      {/* 1. Header: Shows Greeting Card when no plan, or Compact Query Chip when plan is generated */}
+    <div className="mx-auto flex h-full w-full max-w-4xl flex-col space-y-3 p-3">
+      {/* 1. Compact 1-line Header */}
       {!currentPlan ? (
-        <div className="border-border/60 from-card via-card to-muted/20 rounded-lg border bg-gradient-to-br px-3 py-2 shadow-2xs">
-          <div className="flex items-center gap-2">
-            <div className="bg-primary/10 text-primary shrink-0 rounded-md p-1">
-              <Wand2 className="size-3.5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <h3 className="text-foreground text-[11.5px] font-semibold tracking-tight">
-                {t('reorganizeCardTitle')}
-              </h3>
-              <p className="text-muted-foreground/80 truncate text-[10px]">
-                {t('reorganizeCardDesc')}
-              </p>
-            </div>
-          </div>
+        <div className="flex items-center gap-1.5 px-0.5">
+          <Wand2 className="text-primary size-3.5 shrink-0" />
+          <h2 className="text-foreground truncate text-xs font-semibold tracking-tight">
+            {t('reorganizeCardTitle')}
+          </h2>
         </div>
       ) : (
-        /* Compact Query Chip - saves 110px of vertical space */
+        /* Compact Query Chip - saves vertical space when plan preview is active */
         <div className="bg-muted/30 border-border/60 animate-in fade-in flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs duration-150">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Wand2 className="text-primary size-3.5 shrink-0" />
-            <span className="text-foreground truncate text-xs font-medium">"{promptText}"</span>
+            <span className="text-foreground truncate text-xs font-medium">
+              &quot;
+              {promptText.trim() ||
+                (activeMethodology
+                  ? lang === 'tr'
+                    ? activeMethodology.name.tr
+                    : activeMethodology.name.en
+                  : '')}
+              &quot;
+            </span>
           </div>
           <Button
             size="sm"
@@ -477,291 +602,285 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         </div>
       )}
 
-      {/* Prompt Input Form */}
+      {/* Main Flow: Prompt Input → Quick Recipes → Methodologies → Mention a folder */}
       {!currentPlan && (
-        <div className="flex flex-1 flex-col justify-between space-y-3">
-          <div className="space-y-2.5">
-            {/* Quick Prompt Recipe Chips — Placed above input for immediate 1-click access */}
-            <div className="space-y-1.5">
-              <span className="text-muted-foreground/80 block px-1 text-[9.5px] font-semibold tracking-wider uppercase">
-                {lang === 'tr' ? 'Hızlı Komut Reçeteleri' : 'Quick Recipes'}
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {(lang === 'tr'
-                  ? [
-                      {
-                        icon: '⚡',
-                        label: 'Tümünü Düzenle',
-                        prompt:
-                          'Tüm yer imlerimi analiz et ve 6-8 ana tematik klasör altında baştan sona düzenle.',
-                      },
-                      {
-                        icon: '🎯',
-                        label: 'Favicon Launchpad',
-                        prompt:
-                          'Yer İmleri Çubuğundaki doğrudan web araçlarının başlıklarını temizle, yalnızca favicon ikonları bırakarak 1-tıkla hızlı başlatıcı çubuğu oluştur.',
-                      },
-                      {
-                        icon: '🧹',
-                        label: 'Dağınıkları toparla',
-                        prompt:
-                          'Yer İmleri Çubuğundaki dağınık tüm yer imlerini kategorik klasörlere taşı.',
-                      },
-                      {
-                        icon: '🏷️',
-                        label: 'Başlıkları sadeleştir',
-                        prompt:
-                          'Gereksiz uzun veya URL şeklindeki yer imi başlıklarını temiz ve tanınabilir yap.',
-                      },
-                      {
-                        icon: '📁',
-                        label: 'Klasörleri birleştir',
-                        prompt:
-                          'Benzer konudaki dağınık alt klasörleri ana başlıklar altında birleştir.',
-                      },
-                      {
-                        icon: '🚫',
-                        label: 'Özel klasörü koru',
-                        prompt: 'Dağınıkları düzenle ama @"needfix" klasörüne asla dokunma.',
-                      },
-                    ]
-                  : [
-                      {
-                        icon: '⚡',
-                        label: 'Edit All',
-                        prompt:
-                          'Analyze all bookmarks and reorganize the entire library into cohesive thematic folders.',
-                      },
-                      {
-                        icon: '🎯',
-                        label: 'Favicon Launchpad',
-                        prompt:
-                          'Strip text titles of direct bookmarks bar web apps, leaving only clean favicon icons to optimize 300% horizontal bar space.',
-                      },
-                      {
-                        icon: '🧹',
-                        label: 'Triage loose bookmarks',
-                        prompt:
-                          'Organize unfiled and loose bookmarks on the Bookmarks Bar into structured folders.',
-                      },
-                      {
-                        icon: '🏷️',
-                        label: 'Clean up titles',
-                        prompt:
-                          'Simplify and shorten verbose or raw URL bookmark titles into clean, recognizable names.',
-                      },
-                      {
-                        icon: '📁',
-                        label: 'Merge redundant folders',
-                        prompt:
-                          'Merge scattered single-topic folders into cohesive thematic parent folders.',
-                      },
-                      {
-                        icon: '🚫',
-                        label: 'Immune specific folder',
-                        prompt: 'Organize loose bookmarks but do not touch @"needfix".',
-                      },
-                    ]
-                ).map((recipe, rIdx) => (
-                  <button
-                    key={rIdx}
-                    type="button"
-                    onClick={() => {
-                      setPromptText(recipe.prompt);
-                      if (textareaRef.current) {
-                        textareaRef.current.focus();
-                      }
-                    }}
-                    className="bg-muted/30 hover:bg-muted/70 text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10.5px] transition-all duration-120 active:scale-[0.96]"
-                  >
-                    <span>{recipe.icon}</span>
-                    <span>{recipe.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+        <div className="flex flex-1 flex-col space-y-3">
+          {/* 1. Prompt Input Box */}
+          <div className="group relative">
+            {/* @ Mention Autocomplete Menu */}
+            {isMentionOpen && (
+              <MentionMenu
+                items={filteredMentions}
+                selectedIndex={mentionSelectedIndex}
+                onSelect={handleSelectMention}
+                onClose={() => setIsMentionOpen(false)}
+              />
+            )}
 
-            <div className="space-y-1">
-              <div className="text-muted-foreground/90 flex items-center justify-between text-[10.5px]">
-                <span className="text-foreground/80 font-medium">{t('requestLabel')}</span>
-                <span className="text-[9.5px] opacity-75">{t('languageHint')}</span>
-              </div>
-
-              {/* Relative container for Textarea + @ Mention Popup */}
-              <div className="group relative">
-                {/* @ Mention Autocomplete Menu */}
-                {isMentionOpen && (
-                  <MentionMenu
-                    items={filteredMentions}
-                    selectedIndex={mentionSelectedIndex}
-                    onSelect={handleSelectMention}
-                    onClose={() => setIsMentionOpen(false)}
-                  />
-                )}
-
-                <Textarea
-                  ref={textareaRef}
-                  value={promptText}
-                  onChange={handleTextChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    lang === 'tr'
-                      ? "Örn: @IPA klasörüne dokunma, @needfix içindekileri dağıt, @antfu/taze'yi @Development'a taşı..."
-                      : 'e.g. Do not touch @"needfix", merge @"other" into @"Development", move @"antfu/taze"...'
-                  }
-                  className="border-border/80 focus-visible:border-ring min-h-[90px] resize-none pr-16 pb-7 text-xs transition-shadow duration-150 focus-visible:ring-1"
-                  disabled={isLoading}
-                />
-
-                {/* Bottom Right Actions inside Textarea */}
-                <div className="absolute right-2 bottom-2 flex items-center gap-1">
-                  {/* Clickable @ Mention pill */}
-                  <button
-                    type="button"
-                    onClick={handleTriggerMentionClick}
-                    title="Mention target folder or bookmark (@)"
-                    className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
-                  >
-                    <AtSign className="text-primary size-2.5" />
-                    <span>Target</span>
-                  </button>
-
-                  <span className="text-muted-foreground/60 hidden items-center gap-0.5 text-[9px] select-none group-focus-within:inline-flex">
-                    ⌘<CornerDownLeft className="size-2.5" />
-                  </span>
-
-                  <Button
-                    size="sm"
-                    variant="default"
-                    disabled={isLoading || !promptText.trim()}
-                    onClick={() => handleGeneratePlan(promptText)}
-                    className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-foreground/70 disabled:border-border/80 size-6.5 cursor-pointer border border-transparent p-0 transition-all duration-120 active:scale-95 disabled:opacity-85"
-                    title={t('generatePlanTooltip')}
-                  >
-                    {isLoading ? (
-                      <Loader2 className="size-3 animate-spin duration-500" />
-                    ) : (
-                      <Send className="size-3" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Helpful Mention Tip */}
-              <p className="text-muted-foreground/75 flex items-center gap-1 px-1 text-[10px]">
-                <span>💡</span>
-                <span>
-                  {lang === 'tr'
-                    ? 'İpucu: Klasör veya yer imi hedeflemek için @ yazın (Örn: @"IPA" dokunma)'
-                    : 'Tip: Type @ to mention a folder or bookmark (e.g. do not touch @"needfix")'}
-                </span>
-              </p>
-            </div>
-
-            {/* Architecture Methodologies (PARA, Johnny.Decimal, Hot-Warm-Cold, etc.) */}
-            <MethodologySelector
-              lang={lang}
-              activeMethodologyId={activeMethodologyId}
-              onSelectMethodology={(preset) => {
-                setActiveMethodologyId(preset.id);
-                setPromptText(lang === 'tr' ? preset.prompt.tr : preset.prompt.en);
-                if (textareaRef.current) {
-                  textareaRef.current.focus();
-                }
-              }}
+            <Textarea
+              ref={textareaRef}
+              value={promptText}
+              onChange={handleTextChange}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                lang === 'tr'
+                  ? 'Doğal Türkçe veya İngilizce yazın — hedeflemek için @ kullanın (ör. @"needfix" dokunma, @"dev" düzenle)...'
+                  : 'Write in English or Turkish — type @ to target folders or links (e.g. protect @"needfix", group into @"Dev")...'
+              }
+              className="border-border/80 focus-visible:border-ring min-h-[92px] resize-none pr-12 pb-9 text-xs transition-shadow duration-150 focus-visible:ring-1"
+              disabled={isLoading}
             />
 
-            {/* Bottom Section: Recent Operations & Library Structure Preview */}
-            <div className="border-border/60 bg-muted/15 space-y-2 rounded-lg border p-2.5 text-xs">
-              <div className="flex items-center justify-between">
-                <div className="text-foreground/90 flex items-center gap-1.5 text-[11px] font-semibold">
-                  <History className="text-primary size-3.5" />
-                  <span>
-                    {recentSnapshots.length > 0
-                      ? lang === 'tr'
-                        ? 'Son İşlemler & Yedekler'
-                        : 'Recent Operations & Backups'
-                      : lang === 'tr'
-                        ? 'Kütüphane Özeti & Klasörler'
-                        : 'Library Overview & Folders'}
+            {/* Bottom Toolbar inside Textarea */}
+            <div className="absolute right-2 bottom-2 left-2 flex items-center justify-between gap-1.5">
+              <div className="flex min-w-0 items-center gap-1">
+                {/* Clickable @ Target pill */}
+                <button
+                  type="button"
+                  onClick={handleTriggerMentionClick}
+                  title={
+                    lang === 'tr'
+                      ? 'Klasör veya yer imi hedefle (@)'
+                      : 'Mention target folder or bookmark (@)'
+                  }
+                  className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex shrink-0 cursor-pointer items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
+                >
+                  <AtSign className="text-primary size-2.5" />
+                  <span>Target</span>
+                </button>
+
+                {/* Preset selector pill */}
+                {activeMethodology ? (
+                  <span className="border-primary/40 bg-primary/10 text-primary flex max-w-[140px] items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium">
+                    <span className="shrink-0">{activeMethodology.icon}</span>
+                    <span className="truncate">
+                      {lang === 'tr' ? activeMethodology.name.tr : activeMethodology.name.en}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveMethodologyId(null)}
+                      className="hover:text-foreground ml-0.5 cursor-pointer"
+                      title={lang === 'tr' ? 'Preseti kaldır' : 'Clear preset'}
+                    >
+                      <X className="size-2.5" />
+                    </button>
                   </span>
-                </div>
-                <div className="text-muted-foreground flex items-center gap-2 text-[10px]">
-                  <span className="flex items-center gap-1">
-                    <Bookmark className="size-2.5 text-amber-500" />
-                    {availableBookmarks.length}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Folder className="size-2.5 text-sky-500" />
-                    {availableFolders.length}
-                  </span>
-                </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsMethodologiesOpen((prev) => !prev)}
+                    title={
+                      lang === 'tr'
+                        ? 'Yapısal metodoloji şablonu (Preset) seç'
+                        : 'Select architecture methodology preset'
+                    }
+                    className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex shrink-0 cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
+                  >
+                    <Compass className="size-2.5" />
+                    <span>Preset</span>
+                  </button>
+                )}
               </div>
 
-              {recentSnapshots.length > 0 ? (
-                <div className="divide-border/40 divide-y">
-                  {recentSnapshots.slice(0, 3).map((snap, idx) => (
-                    <div
-                      key={snap.id}
-                      className="flex items-center justify-between gap-2 py-1.5 text-[10.5px]"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-foreground truncate font-medium">{snap.description}</p>
-                        <span className="text-muted-foreground text-[9.5px]">
-                          {new Date(snap.timestamp).toLocaleTimeString(
-                            lang === 'tr' ? 'tr-TR' : 'en-US',
-                            { hour: '2-digit', minute: '2-digit' }
-                          )}
-                        </span>
-                      </div>
-                      {idx === 0 && (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          disabled={isUndoing}
-                          onClick={handleUndoLatestSnapshot}
-                          className="h-6 shrink-0 cursor-pointer gap-1 px-2 text-[10px]"
-                        >
-                          <RotateCcw className={`size-2.5 ${isUndoing ? 'animate-spin' : ''}`} />
-                          <span>{t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo')}</span>
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-1 pt-0.5">
-                  {availableFolders
-                    .filter((f) => f.id !== '1' && f.id !== '2')
-                    .slice(0, 8)
-                    .map((folder) => (
-                      <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => {
-                          const mentionText = `@"${folder.title}" `;
-                          setPromptText((prev) =>
-                            prev ? `${prev.trim()} ${mentionText}` : mentionText
-                          );
-                          textareaRef.current?.focus();
-                        }}
-                        title={
-                          lang === 'tr'
-                            ? `İsteme @"${folder.title}" eklemek için tıklayın (${folder.path})`
-                            : `Click to mention @"${folder.title}" (${folder.path})`
-                        }
-                        className="border-border/50 bg-background/70 hover:bg-muted text-muted-foreground hover:text-foreground flex max-w-[145px] cursor-pointer items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[10px] transition-colors"
-                      >
-                        <Folder className="size-2.5 shrink-0 text-amber-500" />
-                        <span className="truncate">
-                          {formatFolderTitle(folder.title, folder.path, lang)}
-                        </span>
-                      </button>
-                    ))}
-                </div>
+              <button
+                type="button"
+                disabled={isLoading || !canSubmit}
+                onClick={() => handleGeneratePlan(promptText)}
+                title={t('generatePlanTooltip')}
+                aria-label={t('generatePlanTooltip')}
+                className={`flex size-6.5 shrink-0 items-center justify-center rounded-md transition-all duration-120 ${
+                  canSubmit && !isLoading
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer shadow-2xs active:scale-95'
+                    : 'bg-muted text-muted-foreground border-border/70 cursor-not-allowed border opacity-90'
+                }`}
+              >
+                {isLoading ? (
+                  <Loader2 className="size-3 animate-spin duration-500" />
+                ) : (
+                  <Send className="size-3" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* 2. Quick Recipes (4 primary + More toggle) */}
+          <div className="space-y-1.5">
+            <span className="text-muted-foreground/80 block px-0.5 text-[9.5px] font-semibold tracking-wider uppercase">
+              {lang === 'tr' ? 'Hızlı Tarifler' : 'Quick Recipes'}
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(showAllRecipes ? recipes : recipes.slice(0, 4)).map((recipe, rIdx) => (
+                <button
+                  key={rIdx}
+                  type="button"
+                  onClick={() => {
+                    setPromptText(recipe.prompt);
+                    if (textareaRef.current) {
+                      textareaRef.current.focus();
+                    }
+                  }}
+                  className="bg-muted/30 hover:bg-muted/70 text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10.5px] transition-all duration-120 active:scale-[0.96]"
+                >
+                  <span>{recipe.icon}</span>
+                  <span>{recipe.label}</span>
+                </button>
+              ))}
+              {recipes.length > 4 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllRecipes((prev) => !prev)}
+                  className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded-md border border-dashed px-2 py-1 text-[10px] font-medium transition-colors"
+                >
+                  {showAllRecipes
+                    ? lang === 'tr'
+                      ? 'Daha az'
+                      : 'Less'
+                    : lang === 'tr'
+                      ? `+${recipes.length - 4} daha`
+                      : 'More'}
+                </button>
               )}
             </div>
           </div>
+
+          {/* 3. Architecture Methodologies (Collapsed by default, acts as Style Preset) */}
+          <MethodologySelector
+            lang={lang}
+            activeMethodologyId={activeMethodologyId}
+            isOpen={isMethodologiesOpen}
+            onToggleOpen={() => setIsMethodologiesOpen((prev) => !prev)}
+            onSelectMethodology={(preset) => {
+              setActiveMethodologyId(preset ? preset.id : null);
+              textareaRef.current?.focus();
+            }}
+          />
+
+          {/* 4. Mention a Folder (Searchable @mention source without unnecessary library stats) */}
+          <div className="border-border/60 bg-muted/15 space-y-2 rounded-lg border p-2.5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-foreground/90 flex items-center gap-1.5 text-[11px] font-semibold">
+                <AtSign className="text-primary size-3.5" />
+                <span>{lang === 'tr' ? 'Klasör hedefle' : 'Mention a folder'}</span>
+              </div>
+              <div className="relative w-32 sm:w-40">
+                <Search className="text-muted-foreground pointer-events-none absolute top-1.5 left-2 size-3" />
+                <Input
+                  value={folderSearchQuery}
+                  onChange={(e) => {
+                    setFolderSearchQuery(e.target.value);
+                    setShowAllMentionFolders(false);
+                  }}
+                  placeholder={lang === 'tr' ? 'Klasör ara...' : 'Filter folders...'}
+                  className="bg-background/70 h-6 pr-5 pl-6 text-[10px]"
+                />
+                {folderSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setFolderSearchQuery('')}
+                    className="text-muted-foreground hover:text-foreground absolute top-1.5 right-1.5 cursor-pointer"
+                  >
+                    <X className="size-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {mentionableFolders.length === 0 ? (
+              <p className="text-muted-foreground py-1 text-[10.5px]">
+                {lang === 'tr' ? 'Eşleşen klasör bulunamadı.' : 'No matching folders.'}
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-1 pt-0.5">
+                {visibleMentionFolders.map((folder) => {
+                  const emojiOnly = isEmojiOnlyTitle(folder.title);
+                  const formattedLabel = formatFolderTitle(folder.title, folder.path, lang);
+
+                  return (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      onClick={() => {
+                        const mentionText = `@"${folder.title}" `;
+                        setPromptText((prev) =>
+                          prev ? `${prev.trim()} ${mentionText}` : mentionText
+                        );
+                        textareaRef.current?.focus();
+                      }}
+                      title={
+                        lang === 'tr'
+                          ? `@"${folder.title}" eklemek için tıklayın (${folder.path})`
+                          : `Click to insert @"${folder.title}" (${folder.path})`
+                      }
+                      className="border-border/50 bg-background/70 hover:bg-muted text-muted-foreground hover:text-foreground flex max-w-[165px] cursor-pointer items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[10px] transition-colors"
+                    >
+                      {!emojiOnly && <Folder className="size-2.5 shrink-0 text-amber-500" />}
+                      <span className="truncate">{formattedLabel}</span>
+                    </button>
+                  );
+                })}
+
+                {remainingFolderCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllMentionFolders(true)}
+                    className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                  >
+                    +{remainingFolderCount} {lang === 'tr' ? 'daha' : 'more'}
+                  </button>
+                )}
+
+                {showAllMentionFolders && mentionableFolders.length > 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllMentionFolders(false)}
+                    className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                  >
+                    {lang === 'tr' ? 'Daha az' : 'Show less'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 5. Recent Backups (Undo strip shown only when snapshots exist) */}
+          {recentSnapshots.length > 0 && (
+            <div className="border-border/50 bg-muted/10 space-y-1 rounded-lg border px-2.5 py-2 text-xs">
+              <div className="text-muted-foreground flex items-center gap-1.5 text-[10px] font-semibold">
+                <History className="text-primary size-3" />
+                <span>{lang === 'tr' ? 'Son Yedekler' : 'Recent Backups'}</span>
+              </div>
+              <div className="divide-border/30 divide-y">
+                {recentSnapshots.slice(0, 2).map((snap, idx) => (
+                  <div
+                    key={snap.id}
+                    className="flex items-center justify-between gap-2 py-1 text-[10.5px]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-foreground truncate font-medium">{snap.description}</p>
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {new Date(snap.timestamp).toLocaleTimeString(
+                          lang === 'tr' ? 'tr-TR' : 'en-US',
+                          { hour: '2-digit', minute: '2-digit' }
+                        )}
+                      </span>
+                    </div>
+                    {idx === 0 && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={isUndoing}
+                        onClick={handleUndoLatestSnapshot}
+                        className="h-5.5 shrink-0 cursor-pointer gap-1 px-2 text-[9.5px]"
+                      >
+                        <RotateCcw className={`size-2.5 ${isUndoing ? 'animate-spin' : ''}`} />
+                        <span>{t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo')}</span>
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
