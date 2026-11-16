@@ -1,7 +1,7 @@
 import {
   Sparkles,
   ExternalLink,
-  Clock,
+  Inbox as InboxIcon,
   Folder,
   Loader2,
   Check,
@@ -16,9 +16,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
-import { formatShortFolderPath } from '@/lib/utils';
+import { formatMiddleFolderPath } from '@/lib/utils';
 import { suggestForNewBookmarkViaBackground } from '@/services/aiClient';
 import { getRecentBookmarks, getBookmarkTree, getAllFolders } from '@/services/bookmarks';
+import { addPendingSuggestion, updateBadgeCount } from '@/services/storage';
 import type { FlatBookmark, PendingSuggestion } from '@/types';
 
 interface RecentBookmarksProps {
@@ -34,6 +35,10 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
   const [bookmarks, setBookmarks] = useState<FlatBookmark[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadingItemId, setLoadingItemId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(
+    null
+  );
   const [activeSuggestion, setActiveSuggestion] = useState<PendingSuggestion | null>(null);
   const [editedTitle, setEditedTitle] = useState('');
   const [appliedId, setAppliedId] = useState<string | null>(null);
@@ -44,6 +49,12 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
     try {
       const items = await getRecentBookmarks(15);
       setBookmarks(items);
+      setSelectedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const validIds = new Set(items.map((i) => i.id));
+        const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
     } catch (err) {
       console.error('Failed to load recent bookmarks:', err);
     } finally {
@@ -151,28 +162,153 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
     }
   };
 
+  const toggleSelectItem = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const isAllSelected = bookmarks.length > 0 && selectedIds.size === bookmarks.length;
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(bookmarks.map((b) => b.id)));
+    }
+  };
+
+  const handleBatchOrganize = async (itemsToOrganize: FlatBookmark[]) => {
+    if (itemsToOrganize.length === 0 || batchProgress) return;
+    setError(null);
+    setBatchProgress({ current: 0, total: itemsToOrganize.length });
+    try {
+      const tree = await getBookmarkTree();
+      const folders = getAllFolders(tree);
+      let latestQueueCount = 0;
+
+      for (let i = 0; i < itemsToOrganize.length; i++) {
+        const item = itemsToOrganize[i]!;
+        setBatchProgress({ current: i + 1, total: itemsToOrganize.length });
+        const suggestion = await suggestForNewBookmarkViaBackground({
+          bookmarkId: item.id,
+          originalTitle: item.title,
+          url: item.url,
+          folders,
+        });
+        const updatedQueue = await addPendingSuggestion(suggestion);
+        latestQueueCount = updatedQueue.length;
+      }
+
+      await updateBadgeCount(latestQueueCount);
+      setSelectedIds(new Set());
+      onBookmarkChanged?.();
+    } catch (err: any) {
+      console.error('Failed to batch organize bookmarks:', err);
+      setError(err?.message || 'Could not generate suggestions.');
+    } finally {
+      setBatchProgress(null);
+    }
+  };
+
+  const selectedBookmarks = bookmarks.filter((b) => selectedIds.has(b.id));
+  const batchTargetBookmarks = selectedBookmarks.length > 0 ? selectedBookmarks : bookmarks;
+
   return (
-    <div className="flex h-full flex-col space-y-2.5 p-3">
-      {/* Subheader */}
-      <div className="border-border/50 flex items-center justify-between border-b pb-1">
+    <div className="mx-auto flex h-full w-full max-w-4xl flex-col space-y-2.5 p-3">
+      {/* Subheader with Organize All (N) / Organize Selected (K) */}
+      <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b pb-2">
         <div>
           <h2 className="text-foreground flex items-center gap-1.5 text-xs font-semibold tracking-tight">
-            <Clock className="text-muted-foreground h-3.5 w-3.5" />
-            {t('recentTitle')}
+            <InboxIcon className="text-muted-foreground h-3.5 w-3.5" />
+            {t('inboxTitle') || 'Inbox'}
           </h2>
-          <p className="text-muted-foreground pt-0.5 text-[10px]">{t('recentDesc')}</p>
+          <p className="text-muted-foreground pt-0.5 text-[10px]">
+            {t('inboxDesc') || t('recentDesc')}
+          </p>
         </div>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          onClick={loadRecent}
-          disabled={isLoading}
-          className="text-muted-foreground hover:text-foreground size-6 active:scale-95"
-          title={t('refreshTooltip')}
-        >
-          <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
-        </Button>
+
+        <div className="flex items-center gap-1.5">
+          {bookmarks.length > 0 && (
+            <Button
+              size="xs"
+              onClick={() => handleBatchOrganize(batchTargetBookmarks)}
+              disabled={Boolean(batchProgress) || isLoading}
+              className="h-6 cursor-pointer gap-1 bg-amber-600 px-2.5 text-[10.5px] font-semibold text-white shadow-2xs hover:bg-amber-600/90 active:scale-[0.97]"
+            >
+              {batchProgress ? (
+                <>
+                  <Loader2 className="size-3 animate-spin" />
+                  <span>
+                    {batchProgress.current}/{batchProgress.total}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="size-3" />
+                  <span>
+                    {selectedBookmarks.length > 0
+                      ? t('organizeSelectedBtn', { count: selectedBookmarks.length }) ||
+                        `Organize selected (${selectedBookmarks.length})`
+                      : t('organizeAllBtn', { count: bookmarks.length }) ||
+                        `Organize all (${bookmarks.length})`}
+                  </span>
+                </>
+              )}
+            </Button>
+          )}
+
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={loadRecent}
+            disabled={isLoading || Boolean(batchProgress)}
+            className="text-muted-foreground hover:text-foreground size-6 active:scale-95"
+            title={t('refreshTooltip')}
+            aria-label={t('refreshTooltip')}
+          >
+            <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
       </div>
+
+      {/* Multi-select bar */}
+      {bookmarks.length > 0 && (
+        <div className="text-muted-foreground flex items-center justify-between px-1 text-[10.5px]">
+          <label className="flex cursor-pointer items-center gap-1.5 select-none">
+            <input
+              type="checkbox"
+              checked={isAllSelected}
+              onChange={toggleSelectAll}
+              className="border-border size-3.5 cursor-pointer rounded accent-amber-600"
+            />
+            <span className="text-foreground/85 font-medium">
+              {selectedIds.size > 0
+                ? lang === 'tr'
+                  ? `${selectedIds.size} seçildi`
+                  : `${selectedIds.size} selected`
+                : lang === 'tr'
+                  ? 'Tümünü seç'
+                  : 'Select all'}
+            </span>
+          </label>
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="text-muted-foreground hover:text-foreground cursor-pointer text-[10px] underline"
+            >
+              {t('clearAll') || 'Clear'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Error alert */}
       {error && (
@@ -227,6 +363,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
             const isAnalyzing = loadingItemId === b.id;
             const isCurrentSuggestion = activeSuggestion?.bookmarkId === b.id;
             const wasJustApplied = appliedId === b.id;
+            const isSelected = selectedIds.has(b.id);
 
             return (
               <div
@@ -236,12 +373,27 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                     ? 'border-emerald-500/50 bg-emerald-500/10'
                     : isCurrentSuggestion
                       ? 'border-amber-400/80 bg-amber-500/5 shadow-2xs'
-                      : 'border-border/60 bg-card/60 hover:bg-card hover:border-border'
+                      : isSelected
+                        ? 'border-amber-500/40 bg-amber-500/5'
+                        : 'border-border/60 bg-card/60 hover:bg-card hover:border-border'
                 }`}
               >
                 {/* Main Row */}
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 flex-1 items-start gap-2">
+                    {/* Multi-select Checkbox */}
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelectItem(b.id)}
+                      aria-label={b.title || b.domain}
+                      className={`border-border mt-0.5 size-3.5 shrink-0 cursor-pointer rounded accent-amber-600 transition-opacity ${
+                        isSelected
+                          ? 'opacity-100'
+                          : 'opacity-50 group-hover:opacity-100 focus:opacity-100'
+                      }`}
+                    />
+
                     {/* Favicon */}
                     <img
                       src={`https://www.google.com/s2/favicons?domain=${b.domain}&sz=32`}
@@ -271,8 +423,8 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                           title={b.path}
                         >
                           <Folder className="size-2.5 shrink-0" />
-                          <span className="max-w-[125px] truncate">
-                            {formatShortFolderPath(b.path, lang)}
+                          <span className="max-w-[140px] truncate">
+                            {formatMiddleFolderPath(b.path, lang)}
                           </span>
                         </span>
                         {b.dateAdded && (
@@ -285,7 +437,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                     </div>
                   </div>
 
-                  {/* Actions Right — Shown on hover (or when active/analyzing) to avoid visual noise */}
+                  {/* Actions Right — Orange AI Organize button shown on hover */}
                   <div
                     className={`flex shrink-0 items-center gap-1 transition-opacity duration-150 ${
                       isAnalyzing || isCurrentSuggestion || wasJustApplied
@@ -308,7 +460,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                       variant="outline"
                       onClick={() => handleRequestSuggestion(b)}
                       disabled={isAnalyzing}
-                      className="border-border/70 bg-background/80 h-6 cursor-pointer gap-1 rounded-md px-1.5 text-[10px] font-medium transition-all duration-120 hover:border-amber-400/50 hover:bg-amber-500/10 active:scale-[0.95]"
+                      className="h-6 cursor-pointer gap-1 rounded-md border-amber-500/40 bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-700 transition-all duration-120 hover:bg-amber-500/25 active:scale-[0.95] dark:text-amber-300"
                       title={t('aiSuggestBtn')}
                     >
                       {isAnalyzing ? (

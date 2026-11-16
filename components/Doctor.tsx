@@ -22,6 +22,18 @@ import {
   X,
   Clock,
   Info,
+  Activity,
+  ArrowRight,
+  Bookmark,
+  Globe,
+  CalendarDays,
+  FolderTree,
+  FileSpreadsheet,
+  FileCode,
+  Share2,
+  Check,
+  ChevronDown,
+  Radio,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -31,7 +43,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
-import { formatFolderTitle, formatShortFolderPath } from '@/lib/utils';
+import { formatFolderTitle, formatShortFolderPath, useResponsiveTabStage } from '@/lib/utils';
 import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import {
   findDuplicates,
@@ -51,6 +63,7 @@ import {
   restoreBookmarkUrls,
   verifyHttpsSupportBatch,
 } from '@/services/cleaner';
+import { calculateInsights } from '@/services/insights';
 import { restoreRecentTrashItems } from '@/services/trash';
 import type {
   DuplicateGroup,
@@ -60,9 +73,11 @@ import type {
   SimilarGroup,
   TrackingCleanItem,
   TrackingCleanOptions,
+  InsightsData,
 } from '@/types';
 
 export type DoctorSubTab =
+  | 'overview'
   | 'duplicates'
   | 'similar'
   | 'trackers'
@@ -71,32 +86,42 @@ export type DoctorSubTab =
   | 'empty'
   | '404';
 
+type NormalizedDoctorSubTab =
+  | 'overview'
+  | 'duplicates'
+  | 'similar'
+  | 'trackers'
+  | 'insecure'
+  | 'broken'
+  | 'empty';
+
 interface DoctorProps {
   onFixed?: () => void;
   initialSubTab?: DoctorSubTab;
+  onNavigateToLibrary?: (query: string) => void;
 }
 
 export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   onFixed,
-  initialSubTab = 'duplicates',
+  initialSubTab = 'overview',
+  onNavigateToLibrary,
 }) {
   const { t, lang } = useI18n();
-  const normalizeSubTab = (
-    tab: DoctorSubTab
-  ): 'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty' =>
+  const normalizeSubTab = (tab: DoctorSubTab): NormalizedDoctorSubTab =>
     tab === '404' ? 'broken' : tab;
-  const [subTab, setSubTab] = useState<
-    'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty'
-  >(normalizeSubTab(initialSubTab));
+  const [subTab, setSubTab] = useState<NormalizedDoctorSubTab>(normalizeSubTab(initialSubTab));
 
   // Mount on demand: only render subtabs the user has actually visited to keep DOM lightweight
-  const [visitedSubTabs, setVisitedSubTabs] = useState<
-    Set<'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty'>
-  >(() => new Set([normalizeSubTab(initialSubTab)]));
+  const [visitedSubTabs, setVisitedSubTabs] = useState<Set<NormalizedDoctorSubTab>>(
+    () => new Set([normalizeSubTab(initialSubTab)])
+  );
 
-  const handleSubTabChange = (
-    nextTab: 'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty'
-  ) => {
+  const { containerRef: subTabBarRef, stage: subTabStage } = useResponsiveTabStage<HTMLDivElement>(
+    7,
+    84
+  );
+
+  const handleSubTabChange = (nextTab: NormalizedDoctorSubTab) => {
     setSubTab(nextTab);
     setVisitedSubTabs((prev) => (prev.has(nextTab) ? prev : new Set(prev).add(nextTab)));
   };
@@ -111,6 +136,19 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
   // Data states
   const [isLoading, setIsLoading] = useState(true);
+  const [insightsBase, setInsightsBase] = useState<InsightsData | null>(null);
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const [openOverviewSections, setOpenOverviewSections] = useState<Record<string, boolean>>({
+    facts: true,
+    age: false,
+    folders: true,
+    domains: false,
+    export: false,
+  });
+
+  const toggleOverviewSection = (key: string) => {
+    setOpenOverviewSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
   const [confirmCleanDuplicates, setConfirmCleanDuplicates] = useState(false);
   const [emptyFolders, setEmptyFolders] = useState<EmptyFolder[]>([]);
@@ -265,6 +303,17 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
+      let cachedBrokenCount = 0;
+      try {
+        const rawScan = localStorage.getItem('last_broken_scan');
+        if (rawScan) {
+          const parsed = JSON.parse(rawScan);
+          if (typeof parsed?.brokenCount === 'number') {
+            cachedBrokenCount = parsed.brokenCount;
+          }
+        }
+      } catch {}
+
       const tree = await getBookmarkTree();
       // Flatten ONCE and reuse across all scanners for 5x CPU performance gain
       const flats = flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'));
@@ -273,6 +322,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       const similar = findSimilarBookmarks(flats);
       const trackers = findTrackingParameters(flats, trackingOptions);
       const insecures = findInsecureHttpBookmarks(flats);
+      const baseInsights = calculateInsights(tree, cachedBrokenCount);
 
       setDuplicates(dups);
       setEmptyFolders(empties);
@@ -280,6 +330,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       setSimilarGroups(similar);
       setTrackingItems(trackers);
       setInsecureBookmarks(insecures);
+      setInsightsBase(baseInsights);
     } catch (err) {
       console.error('Failed to load doctor data:', err);
     } finally {
@@ -851,6 +902,171 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
   const totalDuplicateBookmarks = duplicates.reduce((acc, g) => acc + (g.items.length - 1), 0);
 
+  const hasEverScanned404 = hasScannedBroken || lastScannedAt !== null;
+
+  const effectiveBrokenCount = useMemo(() => {
+    if (hasScannedBroken) return confirmedBrokenLinks.length;
+    return insightsBase?.brokenCount || 0;
+  }, [hasScannedBroken, confirmedBrokenLinks.length, insightsBase?.brokenCount]);
+
+  // Unified live Insights & Health state derived from the exact same Doctor subtab data sources
+  const liveInsights = useMemo(() => {
+    if (!insightsBase) return null;
+    const dupCount = totalDuplicateBookmarks;
+    const emptyCount = emptyFolders.length;
+    const httpCount = insecureBookmarks.length;
+    const brokenCount = effectiveBrokenCount;
+    const similarCount = similarGroups.length;
+    const trackingCount = trackingItems.length;
+
+    const dupPenalty = Math.min(25, dupCount * 3);
+    const emptyPenalty = Math.min(15, emptyCount * 2);
+    const httpPenalty = Math.min(15, httpCount * 2);
+    const brokenPenalty = hasEverScanned404 ? Math.min(35, brokenCount * 5) : 0;
+
+    const rawScore = 100 - dupPenalty - emptyPenalty - httpPenalty - brokenPenalty;
+    const healthScore = Math.max(10, Math.min(100, Math.round(rawScore)));
+    let rating: InsightsData['rating'] = 'excellent';
+    if (healthScore >= 90) rating = 'excellent';
+    else if (healthScore >= 75) rating = 'good';
+    else if (healthScore >= 50) rating = 'warning';
+    else rating = 'critical';
+
+    return {
+      ...insightsBase,
+      healthScore,
+      rating,
+      duplicateCount: dupCount,
+      emptyFolderCount: emptyCount,
+      httpCount,
+      brokenCount,
+      similarCount,
+      trackingCount,
+      penalties: {
+        duplicates: dupPenalty,
+        emptyFolders: emptyPenalty,
+        insecureHttp: httpPenalty,
+        brokenLinks: brokenPenalty,
+      },
+    };
+  }, [
+    insightsBase,
+    totalDuplicateBookmarks,
+    emptyFolders.length,
+    insecureBookmarks.length,
+    effectiveBrokenCount,
+    similarGroups.length,
+    trackingItems.length,
+    hasEverScanned404,
+  ]);
+
+  const formatPct = (count: number, pct: number) => {
+    if (count > 0 && pct === 0) return '<1%';
+    return `${pct}%`;
+  };
+
+  const getScoreColor = (score: number) => {
+    if (score >= 90) return 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10';
+    if (score >= 75) return 'text-teal-500 border-teal-500/30 bg-teal-500/10';
+    if (score >= 50) return 'text-amber-500 border-amber-500/30 bg-amber-500/10';
+    return 'text-rose-500 border-rose-500/30 bg-rose-500/10';
+  };
+
+  const getRatingLabel = (rating: InsightsData['rating']) => {
+    switch (rating) {
+      case 'excellent':
+        return t('healthExcellent') || 'Excellent Health';
+      case 'good':
+        return t('healthGood') || 'Good Health';
+      case 'warning':
+        return t('healthWarning') || 'Needs Attention';
+      case 'critical':
+        return t('healthCritical') || 'Critical Issues';
+    }
+  };
+
+  const handleExportDomainsCsv = () => {
+    if (!liveInsights) return;
+    const rows = [
+      ['Domain', 'Bookmarks Count', 'Percentage'],
+      ...liveInsights.topDomains.map((d) => [d.domain, String(d.count), `${d.percentage}%`]),
+    ];
+    const csvContent = rows
+      .map((r) => r.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bookmark-domains-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportFullJson = async () => {
+    try {
+      const tree = await getBookmarkTree();
+      const all = flattenBookmarks(tree);
+      const jsonContent = JSON.stringify(
+        all.map((b) => ({
+          title: b.title,
+          url: b.url,
+          domain: b.domain,
+          path: b.path,
+          dateAdded: b.dateAdded ? new Date(b.dateAdded).toISOString() : undefined,
+        })),
+        null,
+        2
+      );
+      const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bookmark-otter-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export JSON:', err);
+    }
+  };
+
+  const handleCopySummary = async () => {
+    if (!liveInsights) return;
+    const oldestStr = liveInsights.oldestBookmark
+      ? `• Oldest Bookmark: ${liveInsights.oldestBookmark.title} (${new Date(
+          liveInsights.oldestBookmark.dateAdded
+        ).getFullYear()})`
+      : '';
+    const busiestStr = liveInsights.busiestMonth
+      ? `• Busiest Month: ${new Date(
+          liveInsights.busiestMonth.year,
+          liveInsights.busiestMonth.month
+        ).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US', {
+          month: 'long',
+          year: 'numeric',
+        })} (${liveInsights.busiestMonth.count} bookmarks)`
+      : '';
+
+    const text = [
+      `🦦 Bookmark Otter — Library Report`,
+      `• Health Score: ${liveInsights.healthScore}/100 (${getRatingLabel(liveInsights.rating)})`,
+      `• Total Bookmarks: ${liveInsights.totalBookmarks} across ${liveInsights.totalFolders} folders`,
+      `• Unique Domains: ${liveInsights.uniqueDomains} (${liveInsights.httpsRatio}% HTTPS)`,
+      `• Duplicates: ${liveInsights.duplicateCount} | Empty Folders: ${liveInsights.emptyFolderCount}`,
+      oldestStr,
+      busiestStr,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    await navigator.clipboard.writeText(text);
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2000);
+  };
+
+  const isSubTabLabelVisible = (tabKey: NormalizedDoctorSubTab) =>
+    subTabStage === 'wide' || (subTabStage === 'medium' && subTab === tabKey);
+
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
       {/* Header */}
@@ -861,9 +1077,9 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
               {t('doctorTitle') || 'Bookmark Doctor'}
             </h2>
             <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-medium">
-              {duplicates.length +
+              {totalDuplicateBookmarks +
                 emptyFolders.length +
-                brokenLinks.length +
+                effectiveBrokenCount +
                 similarGroups.length +
                 trackingItems.length +
                 insecureBookmarks.length}{' '}
@@ -880,31 +1096,73 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           variant="ghost"
           onClick={loadData}
           disabled={isLoading || isScanning}
+          title={t('refreshTooltip')}
+          aria-label={t('refreshTooltip')}
           className="text-muted-foreground hover:text-foreground h-7 px-2 text-xs active:scale-[0.97]"
         >
           <RefreshCw className={`size-3.5 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
 
-      {/* Subtab Segmented Control — Active tab shows label, inactive tabs show icon + badge + tooltip */}
-      <div className="bg-muted/30 border-border/60 flex items-center gap-1 rounded-lg border p-1 select-none">
+      {/* 3-Stage Responsive Subtab Bar (container-type: inline-size) */}
+      <div
+        ref={subTabBarRef}
+        data-stage={subTabStage}
+        role="tablist"
+        className="responsive-tab-bar bg-muted/30 border-border/60 flex items-center gap-1 rounded-lg border p-1 select-none"
+      >
         <button
+          role="tab"
+          aria-selected={subTab === 'overview'}
+          aria-label={t('tabOverview') || 'Overview'}
+          data-active={subTab === 'overview'}
+          onClick={() => handleSubTabChange('overview')}
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            subTab === 'overview'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
+          }`}
+          title={t('tabOverview') || 'Overview'}
+        >
+          <Activity className="size-3.5 shrink-0 text-emerald-500" />
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('overview')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabOverview') || 'Overview'}
+          </span>
+        </button>
+
+        <button
+          role="tab"
+          aria-selected={subTab === 'duplicates'}
+          aria-label={t('tabDuplicates') || 'Duplicates'}
+          data-active={subTab === 'duplicates'}
           onClick={() => handleSubTabChange('duplicates')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'duplicates'
-              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={t('tabDuplicates') || 'Duplicates'}
         >
           <Copy className="size-3.5 shrink-0 text-amber-500" />
-          {subTab === 'duplicates' && (
-            <span className="truncate text-[11px]">{t('tabDuplicates') || 'Duplicates'}</span>
-          )}
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('duplicates')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabDuplicates') || 'Duplicates'}
+          </span>
           {totalDuplicateBookmarks > 0 && (
             <Badge
               variant="secondary"
-              className="h-3.5 shrink-0 bg-amber-500/15 px-1 py-0 text-[8.5px] font-semibold text-amber-600 dark:text-amber-400"
+              className="ml-1 h-3.5 shrink-0 bg-amber-500/15 px-1 py-0 text-[8.5px] font-semibold text-amber-600 dark:text-amber-400"
             >
               {totalDuplicateBookmarks}
             </Badge>
@@ -912,22 +1170,32 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         </button>
 
         <button
+          role="tab"
+          aria-selected={subTab === 'similar'}
+          aria-label={t('tabSimilar') || 'Similar'}
+          data-active={subTab === 'similar'}
           onClick={() => handleSubTabChange('similar')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'similar'
-              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={t('tabSimilar') || 'Similar Bookmarks'}
         >
           <Layers className="size-3.5 shrink-0 text-cyan-500" />
-          {subTab === 'similar' && (
-            <span className="truncate text-[11px]">{t('tabSimilar') || 'Similar'}</span>
-          )}
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('similar')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabSimilar') || 'Similar'}
+          </span>
           {similarGroups.length > 0 && (
             <Badge
               variant="secondary"
-              className="h-3.5 shrink-0 bg-cyan-500/15 px-1 py-0 text-[8.5px] font-semibold text-cyan-600 dark:text-cyan-400"
+              className="ml-1 h-3.5 shrink-0 bg-cyan-500/15 px-1 py-0 text-[8.5px] font-semibold text-cyan-600 dark:text-cyan-400"
             >
               {similarGroups.length}
             </Badge>
@@ -935,22 +1203,32 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         </button>
 
         <button
+          role="tab"
+          aria-selected={subTab === 'trackers'}
+          aria-label={t('tabTrackers') || 'Trackers'}
+          data-active={subTab === 'trackers'}
           onClick={() => handleSubTabChange('trackers')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'trackers'
-              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={t('tabTrackers') || 'Tracking Parameters'}
         >
           <ShieldCheck className="size-3.5 shrink-0 text-teal-500" />
-          {subTab === 'trackers' && (
-            <span className="truncate text-[11px]">{t('tabTrackers') || 'Trackers'}</span>
-          )}
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('trackers')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabTrackers') || 'Trackers'}
+          </span>
           {trackingItems.length > 0 && (
             <Badge
               variant="secondary"
-              className="h-3.5 shrink-0 bg-teal-500/15 px-1 py-0 text-[8.5px] font-semibold text-teal-600 dark:text-teal-400"
+              className="ml-1 h-3.5 shrink-0 bg-teal-500/15 px-1 py-0 text-[8.5px] font-semibold text-teal-600 dark:text-teal-400"
             >
               {trackingItems.length}
             </Badge>
@@ -958,10 +1236,14 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         </button>
 
         <button
+          role="tab"
+          aria-selected={subTab === 'insecure'}
+          aria-label={t('tabInsecure') || 'HTTP'}
+          data-active={subTab === 'insecure'}
           onClick={() => handleSubTabChange('insecure')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'insecure'
-              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={
@@ -971,13 +1253,19 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           }
         >
           <ShieldAlert className="size-3.5 shrink-0 text-amber-500" />
-          {subTab === 'insecure' && (
-            <span className="truncate text-[11px]">{t('tabInsecure') || 'HTTP'}</span>
-          )}
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('insecure')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabInsecure') || 'HTTP'}
+          </span>
           {insecureBookmarks.length > 0 && (
             <Badge
               variant="secondary"
-              className="h-3.5 shrink-0 bg-amber-500/15 px-1 py-0 text-[8.5px] font-semibold text-amber-600 dark:text-amber-400"
+              className="ml-1 h-3.5 shrink-0 bg-amber-500/15 px-1 py-0 text-[8.5px] font-semibold text-amber-600 dark:text-amber-400"
             >
               {insecureBookmarks.length}
             </Badge>
@@ -985,10 +1273,14 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         </button>
 
         <button
+          role="tab"
+          aria-selected={subTab === 'broken'}
+          aria-label={t('tabBroken') || '404 Links'}
+          data-active={subTab === 'broken'}
           onClick={() => handleSubTabChange('broken')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'broken'
-              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={
@@ -998,42 +1290,883 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           }
         >
           <Link2Off className="size-3.5 shrink-0 text-rose-500" />
-          {subTab === 'broken' && (
-            <span className="truncate text-[11px]">{t('tabBroken') || '404'}</span>
-          )}
-          {confirmedBrokenLinks.length > 0 && (
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('broken')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabBroken') || '404'}
+          </span>
+          {effectiveBrokenCount > 0 && (
             <Badge
               variant="destructive"
-              className="h-3.5 shrink-0 px-1 py-0 text-[8.5px] font-semibold"
+              className="ml-1 h-3.5 shrink-0 px-1 py-0 text-[8.5px] font-semibold"
             >
-              {confirmedBrokenLinks.length}
+              {effectiveBrokenCount}
             </Badge>
           )}
         </button>
 
         <button
+          role="tab"
+          aria-selected={subTab === 'empty'}
+          aria-label={t('tabEmptyFolders') || 'Empty Folders'}
+          data-active={subTab === 'empty'}
           onClick={() => handleSubTabChange('empty')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'empty'
-              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={t('tabEmptyFolders') || 'Empty Folders'}
         >
           <FolderX className="size-3.5 shrink-0 text-blue-500" />
-          {subTab === 'empty' && (
-            <span className="truncate text-[11px]">{t('tabEmptyFolders') || 'Empty'}</span>
-          )}
+          <span
+            className={`tab-label overflow-hidden text-[11px] whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isSubTabLabelVisible('empty')
+                ? 'ml-1 max-w-[90px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabEmptyFolders') || 'Empty'}
+          </span>
           {emptyFolders.length > 0 && (
             <Badge
               variant="secondary"
-              className="h-3.5 shrink-0 bg-blue-500/15 px-1 py-0 text-[8.5px] font-semibold text-blue-600 dark:text-blue-400"
+              className="ml-1 h-3.5 shrink-0 bg-blue-500/15 px-1 py-0 text-[8.5px] font-semibold text-blue-600 dark:text-blue-400"
             >
               {emptyFolders.length}
             </Badge>
           )}
         </button>
       </div>
+
+      {/* ===================== TAB 0: OVERVIEW (HEALTH + ISSUE CARDS + COLLAPSIBLE INSIGHTS) ===================== */}
+      {visitedSubTabs.has('overview') && (
+        <div className={subTab === 'overview' ? 'space-y-3' : 'hidden'}>
+          {isLoading || !liveInsights ? (
+            <div className="text-muted-foreground flex flex-col items-center justify-center space-y-2 py-16">
+              <div className="border-primary size-5 animate-spin rounded-full border-2 border-t-transparent duration-500" />
+              <p className="text-xs">{t('calculatingInsights') || 'Calculating insights...'}</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* 1. Health Score Hero Card (Single Score Representation + Linked Deductions) */}
+              <div className="border-border/60 bg-card space-y-3 rounded-xl border p-3.5 shadow-2xs">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <span className="text-muted-foreground block text-[11px] font-medium tracking-wider uppercase">
+                      {t('overallHealth') || 'Overall Health Score'}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        variant="outline"
+                        className={`px-2 py-0.5 text-[10.5px] font-semibold ${getScoreColor(
+                          liveInsights.healthScore
+                        )}`}
+                      >
+                        {getRatingLabel(liveInsights.rating)}
+                      </Badge>
+                      <span className="text-muted-foreground text-[11px]">
+                        {liveInsights.duplicateCount === 0 &&
+                        liveInsights.emptyFolderCount === 0 &&
+                        liveInsights.httpCount === 0
+                          ? t('healthCleanMsg') || 'No clutter detected'
+                          : t('healthIssuesMsg', {
+                              count:
+                                liveInsights.duplicateCount +
+                                liveInsights.emptyFolderCount +
+                                liveInsights.httpCount,
+                            }) ||
+                            `${
+                              liveInsights.duplicateCount +
+                              liveInsights.emptyFolderCount +
+                              liveInsights.httpCount
+                            } items to optimize`}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Single Health Score Ring */}
+                  <div
+                    className={`flex size-14 shrink-0 flex-col items-center justify-center rounded-full border-4 shadow-xs ${getScoreColor(
+                      liveInsights.healthScore
+                    )}`}
+                  >
+                    <span className="text-base leading-none font-bold">
+                      {liveInsights.healthScore}
+                    </span>
+                    <span className="text-[8.5px] font-medium opacity-75">/ 100</span>
+                  </div>
+                </div>
+
+                {/* Line-by-line Score Deductions linked to Doctor subtabs */}
+                {(liveInsights.penalties.duplicates > 0 ||
+                  liveInsights.penalties.emptyFolders > 0 ||
+                  liveInsights.penalties.insecureHttp > 0 ||
+                  liveInsights.penalties.brokenLinks > 0) && (
+                  <div className="border-border/40 bg-muted/20 space-y-1.5 rounded-lg border p-2.5 text-xs">
+                    <div className="text-muted-foreground flex items-center justify-between text-[10px] font-semibold tracking-wider uppercase">
+                      <span>{t('scoreBreakdown') || 'Score Deductions'}</span>
+                      <span>-{100 - liveInsights.healthScore} pts</span>
+                    </div>
+                    <div className="divide-border/30 flex flex-col divide-y text-[11px]">
+                      {liveInsights.penalties.duplicates > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSubTabChange('duplicates')}
+                          className="hover:bg-muted/40 flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left text-amber-600 transition-colors dark:text-amber-400"
+                        >
+                          <span>• {t('deductDuplicates') || 'Duplicates'}</span>
+                          <span className="flex items-center gap-1 font-semibold">
+                            -{liveInsights.penalties.duplicates}
+                            <ArrowRight className="size-2.5 opacity-70" />
+                          </span>
+                        </button>
+                      )}
+                      {liveInsights.penalties.emptyFolders > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSubTabChange('empty')}
+                          className="hover:bg-muted/40 flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left text-blue-600 transition-colors dark:text-blue-400"
+                        >
+                          <span>• {t('deductEmpty') || 'Empty folders'}</span>
+                          <span className="flex items-center gap-1 font-semibold">
+                            -{liveInsights.penalties.emptyFolders}
+                            <ArrowRight className="size-2.5 opacity-70" />
+                          </span>
+                        </button>
+                      )}
+                      {liveInsights.penalties.insecureHttp > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSubTabChange('insecure')}
+                          className="text-muted-foreground hover:bg-muted/40 hover:text-foreground flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left transition-colors"
+                        >
+                          <span>• {t('deductHttp') || 'Insecure HTTP'}</span>
+                          <span className="flex items-center gap-1 font-semibold">
+                            -{liveInsights.penalties.insecureHttp}
+                            <ArrowRight className="size-2.5 opacity-70" />
+                          </span>
+                        </button>
+                      )}
+                      {liveInsights.penalties.brokenLinks > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSubTabChange('broken')}
+                          className="hover:bg-muted/40 flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left text-rose-600 transition-colors dark:text-rose-400"
+                        >
+                          <span>• {t('deductBroken') || 'Broken / 404'}</span>
+                          <span className="flex items-center gap-1 font-semibold">
+                            -{liveInsights.penalties.brokenLinks}
+                            <ArrowRight className="size-2.5 opacity-70" />
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 2. 6 Issue Cards (Unified counts from Doctor subtabs) */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {/* Duplicates */}
+                <button
+                  type="button"
+                  onClick={() => handleSubTabChange('duplicates')}
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                    liveInsights.duplicateCount > 0
+                      ? 'border-amber-500/30 bg-amber-500/5'
+                      : 'border-border/50 bg-card'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground text-[10.5px] font-medium">
+                      {t('duplicatesMetric') || 'Duplicates'}
+                    </span>
+                    {liveInsights.duplicateCount > 0 ? (
+                      <ArrowRight className="size-3 text-amber-500" />
+                    ) : (
+                      <CheckCircle2 className="size-3 text-emerald-500" />
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-base font-bold">{liveInsights.duplicateCount}</span>
+                    {liveInsights.duplicateCount === 0 && (
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {t('allClear') || 'All clear'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Similar */}
+                <button
+                  type="button"
+                  onClick={() => handleSubTabChange('similar')}
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                    (liveInsights.similarCount || 0) > 0
+                      ? 'border-cyan-500/30 bg-cyan-500/5'
+                      : 'border-border/50 bg-card'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground text-[10.5px] font-medium">
+                      {t('tabSimilar') || 'Similar'}
+                    </span>
+                    {(liveInsights.similarCount || 0) > 0 ? (
+                      <ArrowRight className="size-3 text-cyan-500" />
+                    ) : (
+                      <CheckCircle2 className="size-3 text-emerald-500" />
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-base font-bold">{liveInsights.similarCount || 0}</span>
+                    {(liveInsights.similarCount || 0) === 0 && (
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {t('allClear') || 'All clear'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Trackers */}
+                <button
+                  type="button"
+                  onClick={() => handleSubTabChange('trackers')}
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                    (liveInsights.trackingCount || 0) > 0
+                      ? 'border-teal-500/30 bg-teal-500/5'
+                      : 'border-border/50 bg-card'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground text-[10.5px] font-medium">
+                      {t('tabTrackers') || 'Trackers'}
+                    </span>
+                    {(liveInsights.trackingCount || 0) > 0 ? (
+                      <ArrowRight className="size-3 text-teal-500" />
+                    ) : (
+                      <CheckCircle2 className="size-3 text-emerald-500" />
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-base font-bold">{liveInsights.trackingCount || 0}</span>
+                    {(liveInsights.trackingCount || 0) === 0 && (
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {t('allClear') || 'All clear'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* HTTP */}
+                <button
+                  type="button"
+                  onClick={() => handleSubTabChange('insecure')}
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                    liveInsights.httpCount > 0
+                      ? 'border-amber-500/30 bg-amber-500/5'
+                      : 'border-border/50 bg-card'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground text-[10.5px] font-medium">
+                      {t('tabInsecure') || 'HTTP'}
+                    </span>
+                    {liveInsights.httpCount > 0 ? (
+                      <ArrowRight className="size-3 text-amber-500" />
+                    ) : (
+                      <CheckCircle2 className="size-3 text-emerald-500" />
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-base font-bold">{liveInsights.httpCount}</span>
+                    {liveInsights.httpCount === 0 && (
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {t('allClear') || 'All clear'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* 404 Links */}
+                <button
+                  type="button"
+                  onClick={() => handleSubTabChange('broken')}
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                    hasEverScanned404 && (liveInsights.brokenCount || 0) > 0
+                      ? 'border-rose-500/30 bg-rose-500/5'
+                      : !hasEverScanned404
+                        ? 'border-border/40 bg-muted/15 opacity-80'
+                        : 'border-border/50 bg-card'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground text-[10.5px] font-medium">
+                      404 Links
+                    </span>
+                    {hasEverScanned404 && (liveInsights.brokenCount || 0) > 0 ? (
+                      <AlertTriangle className="size-3 text-rose-500" />
+                    ) : hasEverScanned404 ? (
+                      <CheckCircle2 className="size-3 text-emerald-500" />
+                    ) : (
+                      <Radio className="text-muted-foreground/50 size-3" />
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    {hasEverScanned404 ? (
+                      <>
+                        <span className="text-base font-bold">{liveInsights.brokenCount || 0}</span>
+                        {(liveInsights.brokenCount || 0) === 0 && (
+                          <span className="text-muted-foreground text-[9.5px]">
+                            {t('allClear') || 'All clear'}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground text-xs font-medium italic">
+                        {lang === 'tr' ? 'Taranmadı' : 'Not scanned'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Empty Folders */}
+                <button
+                  type="button"
+                  onClick={() => handleSubTabChange('empty')}
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                    liveInsights.emptyFolderCount > 0
+                      ? 'border-blue-500/30 bg-blue-500/5'
+                      : 'border-border/50 bg-card'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground text-[10.5px] font-medium">
+                      {t('emptyFoldersMetric') || 'Empty Folders'}
+                    </span>
+                    {liveInsights.emptyFolderCount > 0 ? (
+                      <ArrowRight className="size-3 text-blue-500" />
+                    ) : (
+                      <CheckCircle2 className="size-3 text-emerald-500" />
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-base font-bold">{liveInsights.emptyFolderCount}</span>
+                    {liveInsights.emptyFolderCount === 0 && (
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {t('allClear') || 'All clear'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              </div>
+
+              {/* 3. Collapsible Section: Library Facts */}
+              <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => toggleOverviewSection('facts')}
+                  className="hover:bg-muted/30 flex w-full cursor-pointer items-center justify-between px-3.5 py-2.5 text-left transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="size-3.5 text-amber-500" />
+                    <span className="text-foreground text-xs font-semibold tracking-tight">
+                      {t('libraryFactsTitle') || 'Library Facts'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground text-[10px]">
+                      {liveInsights.totalBookmarks} {t('totalLinks') || 'links'} ·{' '}
+                      {liveInsights.totalFolders} {t('totalFolders') || 'folders'}
+                    </span>
+                    <ChevronDown
+                      className={`text-muted-foreground size-3.5 transition-transform duration-150 ${
+                        openOverviewSections.facts ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {openOverviewSections.facts && (
+                  <div className="border-border/40 divide-border/30 divide-y border-t px-3.5 py-1.5 text-xs">
+                    {liveInsights.oldestBookmark && (
+                      <div className="flex items-center justify-between gap-2 py-2">
+                        <span className="text-muted-foreground flex shrink-0 items-center gap-1.5">
+                          <Clock className="size-3 text-blue-500" />
+                          {t('oldestBookmark') || 'Oldest Bookmark'}
+                        </span>
+                        <a
+                          href={liveInsights.oldestBookmark.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary flex min-w-0 items-center gap-1 truncate text-[11px] font-medium hover:underline"
+                          title={`${liveInsights.oldestBookmark.title} — ${liveInsights.oldestBookmark.domain}`}
+                        >
+                          <span className="truncate">{liveInsights.oldestBookmark.title}</span>
+                          <span className="text-muted-foreground shrink-0 text-[10px]">
+                            ({new Date(liveInsights.oldestBookmark.dateAdded).getFullYear()})
+                          </span>
+                          <ExternalLink className="size-2.5 shrink-0 opacity-60" />
+                        </a>
+                      </div>
+                    )}
+
+                    {liveInsights.busiestMonth && (
+                      <div className="flex items-center justify-between py-2">
+                        <span className="text-muted-foreground flex items-center gap-1.5">
+                          <CalendarDays className="size-3 text-emerald-500" />
+                          {t('busiestMonth') || 'Busiest Month'}
+                        </span>
+                        <span className="text-[11px] font-medium">
+                          {new Date(
+                            liveInsights.busiestMonth.year,
+                            liveInsights.busiestMonth.month
+                          ).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US', {
+                            month: 'short',
+                            year: 'numeric',
+                          })}{' '}
+                          <span className="text-muted-foreground font-normal">
+                            ({liveInsights.busiestMonth.count})
+                          </span>
+                        </span>
+                      </div>
+                    )}
+
+                    <div
+                      onClick={() => {
+                        const parts = (liveInsights.deepestFolderPath || '').split(' / ');
+                        const leaf = parts[parts.length - 1] || '';
+                        onNavigateToLibrary?.(leaf);
+                      }}
+                      className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                      title={
+                        liveInsights.deepestFolderPath
+                          ? `Filter Library: ${liveInsights.deepestFolderPath}`
+                          : 'Open in Library'
+                      }
+                    >
+                      <span className="text-muted-foreground flex items-center gap-1.5">
+                        <Layers className="size-3 text-purple-500" />
+                        {t('deepestNesting') || 'Deepest Folder Nesting'}
+                      </span>
+                      <span className="flex items-center gap-1 text-[11px] font-medium">
+                        {liveInsights.deepestNesting} {t('levels') || 'levels'}
+                        <ArrowRight className="text-muted-foreground size-2.5" />
+                      </span>
+                    </div>
+
+                    <div
+                      onClick={() => onNavigateToLibrary?.('is:loose')}
+                      className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                      title={
+                        lang === 'tr'
+                          ? 'Klasörsüz yer imlerini Kütüphanede filtrele'
+                          : 'Filter loose bookmarks in Library'
+                      }
+                    >
+                      <span className="text-muted-foreground flex items-center gap-1.5">
+                        <Bookmark className="size-3 text-amber-500" />
+                        {t('looseBookmarks') || 'Loose Bookmarks (No Folder)'}
+                      </span>
+                      <span className="flex items-center gap-1 text-[11px] font-medium">
+                        {liveInsights.looseBookmarksCount}
+                        <ArrowRight className="text-muted-foreground size-2.5" />
+                      </span>
+                    </div>
+
+                    <div
+                      onClick={() => onNavigateToLibrary?.('')}
+                      className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                      title={lang === 'tr' ? 'Kütüphanede aç' : 'Open in Library'}
+                    >
+                      <span className="text-muted-foreground flex items-center gap-1.5">
+                        <FolderTree className="size-3 text-sky-500" />
+                        {t('avgBookmarksPerFolder') || 'Avg. Bookmarks / Folder'}
+                      </span>
+                      <span className="flex items-center gap-1 text-[11px] font-medium">
+                        {liveInsights.avgBookmarksPerFolder}
+                        <ArrowRight className="text-muted-foreground size-2.5" />
+                      </span>
+                    </div>
+
+                    <div
+                      onClick={() => onNavigateToLibrary?.('is:single-domain')}
+                      className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                      title={
+                        lang === 'tr'
+                          ? 'Tek seferlik domainleri Kütüphanede filtrele'
+                          : 'Filter single-use domains in Library'
+                      }
+                    >
+                      <span className="text-muted-foreground flex items-center gap-1.5">
+                        <Globe className="size-3 text-indigo-500" />
+                        {t('singleUseDomains') || 'Domains Saved Only Once'}
+                      </span>
+                      <span className="flex items-center gap-1 text-[11px] font-medium">
+                        {liveInsights.singleUseDomainsCount}
+                        <ArrowRight className="text-muted-foreground size-2.5" />
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 4. Collapsible Section: Bookmark Age Distribution */}
+              <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => toggleOverviewSection('age')}
+                  className="hover:bg-muted/30 flex w-full cursor-pointer items-center justify-between px-3.5 py-2.5 text-left transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Clock className="size-3.5 text-sky-500" />
+                    <span className="text-foreground text-xs font-semibold tracking-tight">
+                      {t('bookmarkAgeTitle') || 'Bookmark Age Distribution'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground text-[10px]">
+                      {liveInsights.totalBookmarks} total
+                    </span>
+                    <ChevronDown
+                      className={`text-muted-foreground size-3.5 transition-transform duration-150 ${
+                        openOverviewSections.age ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {openOverviewSections.age && (
+                  <div className="border-border/40 space-y-3 border-t p-3.5">
+                    <div className="bg-muted/40 flex h-2 w-full overflow-hidden rounded-full">
+                      <div
+                        className="bg-emerald-500 transition-[width] duration-300"
+                        style={{
+                          width: `${liveInsights.ageDistribution.under6Months.percentage}%`,
+                        }}
+                      />
+                      <div
+                        className="bg-sky-500 transition-[width] duration-300"
+                        style={{
+                          width: `${liveInsights.ageDistribution.sixTo12Months.percentage}%`,
+                        }}
+                      />
+                      <div
+                        className="bg-amber-500 transition-[width] duration-300"
+                        style={{
+                          width: `${liveInsights.ageDistribution.oneTo3Years.percentage}%`,
+                        }}
+                      />
+                      <div
+                        className="bg-purple-500 transition-[width] duration-300"
+                        style={{
+                          width: `${liveInsights.ageDistribution.over3Years.percentage}%`,
+                        }}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                      <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                        <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                          <span className="size-1.5 rounded-full bg-emerald-500" />
+                          <span>{t('under6mo') || '< 6 months'}</span>
+                        </div>
+                        <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                          <span>
+                            {formatPct(
+                              liveInsights.ageDistribution.under6Months.count,
+                              liveInsights.ageDistribution.under6Months.percentage
+                            )}
+                          </span>
+                          <span className="text-muted-foreground text-[9.5px] font-normal">
+                            ({liveInsights.ageDistribution.under6Months.count})
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                        <div className="flex items-center gap-1.5 text-[10px] text-sky-600 dark:text-sky-400">
+                          <span className="size-1.5 rounded-full bg-sky-500" />
+                          <span>{t('sixTo12mo') || '6 - 12 months'}</span>
+                        </div>
+                        <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                          <span>
+                            {formatPct(
+                              liveInsights.ageDistribution.sixTo12Months.count,
+                              liveInsights.ageDistribution.sixTo12Months.percentage
+                            )}
+                          </span>
+                          <span className="text-muted-foreground text-[9.5px] font-normal">
+                            ({liveInsights.ageDistribution.sixTo12Months.count})
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                        <div className="flex items-center gap-1.5 text-[10px] text-amber-600 dark:text-amber-400">
+                          <span className="size-1.5 rounded-full bg-amber-500" />
+                          <span>{t('oneTo3yr') || '1 - 3 years'}</span>
+                        </div>
+                        <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                          <span>
+                            {formatPct(
+                              liveInsights.ageDistribution.oneTo3Years.count,
+                              liveInsights.ageDistribution.oneTo3Years.percentage
+                            )}
+                          </span>
+                          <span className="text-muted-foreground text-[9.5px] font-normal">
+                            ({liveInsights.ageDistribution.oneTo3Years.count})
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="border-border/40 bg-muted/15 space-y-0.5 rounded-md border p-2">
+                        <div className="flex items-center gap-1.5 text-[10px] text-purple-600 dark:text-purple-400">
+                          <span className="size-1.5 rounded-full bg-purple-500" />
+                          <span>{t('over3yr') || '3+ years'}</span>
+                        </div>
+                        <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                          <span>
+                            {formatPct(
+                              liveInsights.ageDistribution.over3Years.count,
+                              liveInsights.ageDistribution.over3Years.percentage
+                            )}
+                          </span>
+                          <span className="text-muted-foreground text-[9.5px] font-normal">
+                            ({liveInsights.ageDistribution.over3Years.count})
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 5. Collapsible Section: Largest Folders */}
+              {liveInsights.topFolders.length > 0 && (
+                <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => toggleOverviewSection('folders')}
+                    className="hover:bg-muted/30 flex w-full cursor-pointer items-center justify-between px-3.5 py-2.5 text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Folder className="size-3.5 text-amber-500" />
+                      <span className="text-foreground text-xs font-semibold tracking-tight">
+                        {t('largestFoldersTitle') || 'Largest Folders'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground text-[10px]">
+                        {liveInsights.totalFolders} folders
+                      </span>
+                      <ChevronDown
+                        className={`text-muted-foreground size-3.5 transition-transform duration-150 ${
+                          openOverviewSections.folders ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </div>
+                  </button>
+
+                  {openOverviewSections.folders && (
+                    <div className="border-border/40 space-y-2 border-t p-3.5">
+                      {(() => {
+                        const maxFolderCount = Math.max(1, liveInsights.topFolders[0]?.count || 1);
+                        return liveInsights.topFolders.map((folder) => {
+                          const barWidth = Math.round((folder.count / maxFolderCount) * 100);
+                          return (
+                            <div
+                              key={folder.id}
+                              onClick={() => onNavigateToLibrary?.(folder.title)}
+                              className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1.5 transition-colors"
+                              title={`${folder.path} — Click to filter Library`}
+                            >
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <Folder className="size-3.5 shrink-0 text-amber-500" />
+                                  <span className="text-foreground group-hover:text-primary truncate text-[11px] font-medium transition-colors">
+                                    {formatFolderTitle(folder.title, folder.path, lang)}
+                                  </span>
+                                  <span
+                                    className="text-muted-foreground/60 hidden truncate text-[9.5px] sm:inline"
+                                    title={folder.path}
+                                  >
+                                    ({formatShortFolderPath(folder.path, lang)})
+                                  </span>
+                                </div>
+                                <span className="text-muted-foreground group-hover:text-foreground shrink-0 text-[10.5px]">
+                                  {folder.count} ({formatPct(folder.count, folder.percentage)})
+                                </span>
+                              </div>
+
+                              <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                                <div
+                                  className="h-full rounded-full bg-amber-500 transition-[width] duration-300 ease-out"
+                                  style={{ width: `${barWidth}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 6. Collapsible Section: Top Domains */}
+              <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => toggleOverviewSection('domains')}
+                  className="hover:bg-muted/30 flex w-full cursor-pointer items-center justify-between px-3.5 py-2.5 text-left transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Globe className="size-3.5 text-indigo-500" />
+                    <span className="text-foreground text-xs font-semibold tracking-tight">
+                      {t('topDomainsTitle') || 'Top Bookmarked Domains'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground text-[10px]">
+                      {liveInsights.uniqueDomains} {t('totalUnique') || 'unique'}
+                    </span>
+                    <ChevronDown
+                      className={`text-muted-foreground size-3.5 transition-transform duration-150 ${
+                        openOverviewSections.domains ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {openOverviewSections.domains && (
+                  <div className="border-border/40 space-y-1.5 border-t p-3.5">
+                    {liveInsights.topDomains.length === 0 ? (
+                      <p className="text-muted-foreground py-2 text-xs">
+                        {t('noDomainsYet') || 'No domains bookmarked yet.'}
+                      </p>
+                    ) : (
+                      (() => {
+                        const maxDomainCount = Math.max(1, liveInsights.topDomains[0]?.count || 1);
+                        return liveInsights.topDomains.map((item) => {
+                          const barWidth = Math.round((item.count / maxDomainCount) * 100);
+                          return (
+                            <div
+                              key={item.domain}
+                              onClick={() => onNavigateToLibrary?.(item.domain)}
+                              className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1 transition-colors"
+                              title={`Click to filter Library by ${item.domain}`}
+                            >
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <img
+                                    src={`https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(
+                                      `https://${item.domain}`
+                                    )}&sz=32`}
+                                    alt=""
+                                    className="size-3.5 shrink-0 rounded-xs"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                  <span className="text-foreground group-hover:text-primary truncate font-mono text-[11px] font-medium transition-colors">
+                                    {item.domain}
+                                  </span>
+                                </div>
+                                <span className="text-muted-foreground group-hover:text-foreground shrink-0 text-[10.5px]">
+                                  {item.count} ({formatPct(item.count, item.percentage)})
+                                </span>
+                              </div>
+
+                              <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                                <div
+                                  className="bg-foreground/60 h-full rounded-full transition-[width] duration-300 ease-out"
+                                  style={{ width: `${barWidth}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 7. Collapsible Section: Share & Export */}
+              <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => toggleOverviewSection('export')}
+                  className="hover:bg-muted/30 flex w-full cursor-pointer items-center justify-between px-3.5 py-2.5 text-left transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Share2 className="text-muted-foreground size-3.5" />
+                    <span className="text-foreground text-xs font-semibold tracking-tight">
+                      {t('exportShareTitle') || 'Share & Export'}
+                    </span>
+                  </div>
+                  <ChevronDown
+                    className={`text-muted-foreground size-3.5 transition-transform duration-150 ${
+                      openOverviewSections.export ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {openOverviewSections.export && (
+                  <div className="border-border/40 flex flex-wrap items-center gap-1.5 border-t p-3">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={handleExportDomainsCsv}
+                      className="h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-[0.97]"
+                      title="Download domains as CSV"
+                    >
+                      <FileSpreadsheet className="size-3 text-emerald-500" />
+                      <span>{t('exportDomainsCsv') || 'Domains (CSV)'}</span>
+                    </Button>
+
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={handleExportFullJson}
+                      className="h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-[0.97]"
+                      title="Download full library backup as JSON"
+                    >
+                      <FileCode className="size-3 text-sky-500" />
+                      <span>{t('exportJson') || 'Full Data (JSON)'}</span>
+                    </Button>
+
+                    <Button
+                      size="xs"
+                      variant="secondary"
+                      onClick={handleCopySummary}
+                      className="h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-[0.97]"
+                      title="Copy text summary to clipboard"
+                    >
+                      {copiedSummary ? (
+                        <>
+                          <Check className="size-3 text-emerald-500" />
+                          <span>{t('summaryCopied') || 'Copied!'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3" />
+                          <span>{t('copySummary') || 'Copy Summary'}</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ===================== TAB 1: DUPLICATES ===================== */}
       {visitedSubTabs.has('duplicates') && (

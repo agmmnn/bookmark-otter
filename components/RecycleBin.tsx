@@ -1,4 +1,4 @@
-import { Trash2, RotateCcw, Folder, Globe, Clock, CheckCircle2 } from 'lucide-react';
+import { Trash2, RotateCcw, Folder, Globe, Clock, CheckCircle2, ArrowLeft } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -16,10 +16,12 @@ import type { TrashItem } from '@/types';
 
 interface RecycleBinProps {
   onRestored?: () => void;
+  onClose?: () => void;
 }
 
 export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function RecycleBin({
   onRestored,
+  onClose,
 }) {
   const { t, lang } = useI18n();
   const [items, setItems] = useState<TrashItem[]>([]);
@@ -62,6 +64,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
   const handleDeletePermanent = async (item: TrashItem) => {
     await permanentlyDelete(item.id);
     setItems((prev) => prev.filter((i) => i.id !== item.id));
+    onRestored?.();
   };
 
   const handleEmptyAll = async () => {
@@ -70,6 +73,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
     setShowConfirmEmpty(false);
     setSuccessToast(t('trashEmptiedSuccess') || 'Recycle bin emptied');
     setTimeout(() => setSuccessToast(null), 3000);
+    onRestored?.();
   };
 
   const formatDeletedAgo = (timestamp: number) => {
@@ -84,21 +88,37 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
-      {/* Header Info */}
+    <div className="animate-in fade-in slide-in-from-top-1 mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3 duration-150">
+      {/* Header Info with Back Button */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-foreground text-sm font-semibold tracking-tight">
-              {t('recycleBinTitle') || 'Recycle Bin'}
-            </h2>
-            <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-medium">
-              {items.length} {t('itemsLabel') || 'items'}
-            </Badge>
+        <div className="flex items-start gap-2">
+          {onClose && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onClose}
+              title={t('backBtn') || 'Back'}
+              aria-label={t('backBtn') || 'Back'}
+              className="border-border/60 mt-0.5 h-7 cursor-pointer gap-1 px-2 text-xs font-medium active:scale-[0.97]"
+            >
+              <ArrowLeft className="size-3.5" />
+              <span>{t('backBtn') || 'Back'}</span>
+            </Button>
+          )}
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-foreground text-sm font-semibold tracking-tight">
+                {t('recycleBinTitle') || 'Recycle Bin'}
+              </h2>
+              <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-medium">
+                {items.length} {t('itemsLabel') || 'items'}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              {t('recycleBinDesc') ||
+                'Deleted items are kept for 30 days before permanent removal.'}
+            </p>
           </div>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            {t('recycleBinDesc') || 'Deleted items are kept for 30 days before permanent removal.'}
-          </p>
         </div>
 
         {items.length > 0 && (

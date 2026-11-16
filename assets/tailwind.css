@@ -188,6 +188,27 @@
   background-color: oklch(0.55 0 0 / 45%);
 }
 
+.responsive-tab-bar {
+  container-type: inline-size;
+  container-name: tabbar;
+}
+
+@container tabbar (max-width: 335px) {
+  .responsive-tab-bar[data-stage='medium'] [data-active='false'] .tab-label {
+    max-width: 0;
+    opacity: 0;
+    margin-left: 0;
+  }
+}
+
+@container tabbar (max-width: 198px) {
+  .responsive-tab-bar .tab-label {
+    max-width: 0;
+    opacity: 0;
+    margin-left: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,

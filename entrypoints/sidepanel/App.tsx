@@ -1,34 +1,17 @@
-import { Clock, FolderTree, Wand2, Stethoscope, Activity, Trash2, Loader2 } from 'lucide-react';
+import { Inbox, FolderTree, Wand2, Stethoscope, Loader2 } from 'lucide-react';
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
 
 import '@/assets/tailwind.css';
 import { browser, type Browser } from 'wxt/browser';
 
+import type { DoctorSubTab } from '@/components/Doctor';
 import { Header } from '@/components/Header';
 import { PendingSuggestionCard } from '@/components/PendingSuggestionCard';
 import { RecentBookmarks } from '@/components/RecentBookmarks';
 import { Toaster } from '@/components/ui/sonner';
-
-const AICopilot = lazy(() =>
-  import('@/components/AICopilot').then((m) => ({ default: m.AICopilot }))
-);
-const Doctor = lazy(() => import('@/components/Doctor').then((m) => ({ default: m.Doctor })));
-const Explorer = lazy(() => import('@/components/Explorer').then((m) => ({ default: m.Explorer })));
-const Insights = lazy(() => import('@/components/Insights').then((m) => ({ default: m.Insights })));
-const RecycleBin = lazy(() =>
-  import('@/components/RecycleBin').then((m) => ({ default: m.RecycleBin }))
-);
-const SettingsModal = lazy(() =>
-  import('@/components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
-);
-
-const TabFallback = () => (
-  <div className="text-muted-foreground flex flex-1 items-center justify-center py-12">
-    <Loader2 className="size-4 animate-spin" />
-  </div>
-);
 import { useI18n } from '@/lib/i18n';
+import { useResponsiveTabStage } from '@/lib/utils';
 import { getBookmarkTree, restoreSnapshot } from '@/services/bookmarks';
 import {
   validateAndCleanPendingSuggestions,
@@ -41,46 +24,57 @@ import {
 import { getTrashCount } from '@/services/trash';
 import type { PendingSuggestion, UndoOperation } from '@/types';
 
-type ActiveTab = 'recent' | 'explorer' | 'copilot' | 'doctor' | 'insights' | 'trash';
+const AICopilot = lazy(() =>
+  import('@/components/AICopilot').then((m) => ({ default: m.AICopilot }))
+);
+const Doctor = lazy(() => import('@/components/Doctor').then((m) => ({ default: m.Doctor })));
+const Explorer = lazy(() => import('@/components/Explorer').then((m) => ({ default: m.Explorer })));
+const RecycleBin = lazy(() =>
+  import('@/components/RecycleBin').then((m) => ({ default: m.RecycleBin }))
+);
+const SettingsModal = lazy(() =>
+  import('@/components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
+);
+
+const TabFallback = () => (
+  <div className="text-muted-foreground flex flex-1 items-center justify-center py-12">
+    <Loader2 className="size-4 animate-spin" />
+  </div>
+);
+
+type ActiveTab = 'inbox' | 'library' | 'copilot' | 'doctor';
 
 export const App: React.FC = () => {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<ActiveTab>('recent');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('inbox');
   // Lazy mount on demand: only mount tabs the user actually opens to guarantee instant <50ms TTI
-  const [visitedTabs, setVisitedTabs] = useState<Set<ActiveTab>>(() => new Set(['recent']));
+  const [visitedTabs, setVisitedTabs] = useState<Set<ActiveTab>>(() => new Set(['inbox']));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isTrashOpen, setIsTrashOpen] = useState(false);
   const [pendingSuggestions, setPendingSuggestions] = useState<PendingSuggestion[]>([]);
   const [trashCount, setTrashCount] = useState<number>(0);
   const [isApplyingSuggestion, setIsApplyingSuggestion] = useState(false);
-  const [explorerSearchQuery, setExplorerSearchQuery] = useState('');
-  const [doctorSubTab, setDoctorSubTab] = useState<
-    'duplicates' | 'similar' | 'trackers' | 'insecure' | '404' | 'empty'
-  >('duplicates');
+  const [librarySearchQuery, setLibrarySearchQuery] = useState('');
+  const [doctorSubTab, setDoctorSubTab] = useState<DoctorSubTab>('overview');
+
+  // 3-Stage Responsive Tab Bar based on container inline-size (~84px per labeled tab)
+  const { containerRef: navRef, stage: navStage } = useResponsiveTabStage<HTMLElement>(4, 84);
 
   const handleTabChange = useCallback((tab: ActiveTab) => {
+    setIsTrashOpen(false);
     setActiveTab(tab);
     setVisitedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
   }, []);
 
   const handleOpenSettings = useCallback(() => setIsSettingsOpen(true), []);
   const handleCloseSettings = useCallback(() => setIsSettingsOpen(false), []);
+  const handleToggleTrash = useCallback(() => setIsTrashOpen((prev) => !prev), []);
+  const handleCloseTrash = useCallback(() => setIsTrashOpen(false), []);
 
-  const handleNavigateToDoctor = useCallback(
-    (subTab?: 'duplicates' | 'similar' | 'trackers' | 'insecure' | '404' | 'empty') => {
-      if (subTab) setDoctorSubTab(subTab);
-      handleTabChange('doctor');
-    },
-    [handleTabChange]
-  );
-
-  const handleNavigateToCopilot = useCallback(() => {
-    handleTabChange('copilot');
-  }, [handleTabChange]);
-
-  const handleNavigateToExplorer = useCallback(
+  const handleNavigateToLibrary = useCallback(
     (query: string) => {
-      setExplorerSearchQuery(query);
-      handleTabChange('explorer');
+      setLibrarySearchQuery(query);
+      handleTabChange('library');
     },
     [handleTabChange]
   );
@@ -310,164 +304,199 @@ export const App: React.FC = () => {
     await updateBadgeCount(0);
   };
 
+  const isTabLabelVisible = (tabKey: ActiveTab) =>
+    navStage === 'wide' || (navStage === 'medium' && activeTab === tabKey && !isTrashOpen);
+
   return (
     <div className="bg-background text-foreground selection:bg-primary/20 flex min-h-screen flex-col antialiased">
-      <Header onOpenSettings={handleOpenSettings} />
+      <Header
+        onOpenSettings={handleOpenSettings}
+        trashCount={trashCount}
+        isTrashOpen={isTrashOpen}
+        onToggleTrash={handleToggleTrash}
+      />
 
-      {/* Navigation Tabs - Active tab shows label, inactive tabs show icon + tooltip */}
-      <nav className="border-border/50 bg-muted/20 flex items-center gap-1 border-b px-2 py-1 select-none">
-        {/* 1. Recent */}
+      {/* 3-Stage Responsive Navigation Bar (Inbox · Library · Copilot · Doctor) */}
+      <nav
+        ref={navRef}
+        data-stage={navStage}
+        role="tablist"
+        aria-label="Main navigation"
+        className="responsive-tab-bar border-border/50 bg-muted/20 flex items-center gap-1 border-b px-2 py-1 select-none"
+      >
+        {/* 1. Inbox */}
         <button
-          onClick={() => handleTabChange('recent')}
-          title={t('tabRecent') || 'Recent'}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'recent'
-              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+          role="tab"
+          aria-selected={activeTab === 'inbox' && !isTrashOpen}
+          aria-label={t('tabInbox') || 'Inbox'}
+          data-active={activeTab === 'inbox' && !isTrashOpen}
+          onClick={() => handleTabChange('inbox')}
+          title={t('tabInbox') || 'Inbox'}
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            activeTab === 'inbox' && !isTrashOpen
+              ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <Clock className="size-3.5 shrink-0" />
-          {activeTab === 'recent' && <span>{t('tabRecent')}</span>}
+          <Inbox className="size-3.5 shrink-0" />
+          <span
+            className={`tab-label overflow-hidden whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isTabLabelVisible('inbox')
+                ? 'ml-1.5 max-w-[96px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabInbox') || 'Inbox'}
+          </span>
         </button>
 
-        {/* 2. Explorer */}
+        {/* 2. Library */}
         <button
-          onClick={() => handleTabChange('explorer')}
-          title={t('tabExplorer') || 'Explorer'}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'explorer'
-              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+          role="tab"
+          aria-selected={activeTab === 'library' && !isTrashOpen}
+          aria-label={t('tabLibrary') || 'Library'}
+          data-active={activeTab === 'library' && !isTrashOpen}
+          onClick={() => handleTabChange('library')}
+          title={t('tabLibrary') || 'Library'}
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            activeTab === 'library' && !isTrashOpen
+              ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
           <FolderTree className="size-3.5 shrink-0 text-amber-500" />
-          {activeTab === 'explorer' && <span>{t('tabExplorer') || 'Explorer'}</span>}
+          <span
+            className={`tab-label overflow-hidden whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isTabLabelVisible('library')
+                ? 'ml-1.5 max-w-[96px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabLibrary') || 'Library'}
+          </span>
         </button>
 
         {/* 3. Copilot */}
         <button
+          role="tab"
+          aria-selected={activeTab === 'copilot' && !isTrashOpen}
+          aria-label={t('tabCopilot') || 'Copilot'}
+          data-active={activeTab === 'copilot' && !isTrashOpen}
           onClick={() => handleTabChange('copilot')}
           title={t('tabCopilot') || 'Copilot'}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'copilot'
-              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            activeTab === 'copilot' && !isTrashOpen
+              ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
           <Wand2 className="text-primary size-3.5 shrink-0" />
-          {activeTab === 'copilot' && <span>{t('tabCopilot')}</span>}
+          <span
+            className={`tab-label overflow-hidden whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isTabLabelVisible('copilot')
+                ? 'ml-1.5 max-w-[96px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabCopilot') || 'Copilot'}
+          </span>
         </button>
 
         {/* 4. Doctor */}
         <button
-          onClick={() => handleTabChange('doctor')}
+          role="tab"
+          aria-selected={activeTab === 'doctor' && !isTrashOpen}
+          aria-label={t('tabDoctor') || 'Doctor'}
+          data-active={activeTab === 'doctor' && !isTrashOpen}
+          onClick={() => {
+            setDoctorSubTab('overview');
+            handleTabChange('doctor');
+          }}
           title={t('tabDoctor') || 'Doctor'}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'doctor'
-              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+            activeTab === 'doctor' && !isTrashOpen
+              ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
           <Stethoscope className="size-3.5 shrink-0 text-emerald-500" />
-          {activeTab === 'doctor' && <span>{t('tabDoctor') || 'Doctor'}</span>}
-        </button>
-
-        {/* 5. Insights */}
-        <button
-          onClick={() => handleTabChange('insights')}
-          title={t('tabInsights') || 'Insights'}
-          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'insights'
-              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
-          }`}
-        >
-          <Activity className="size-3.5 shrink-0 text-blue-500" />
-          {activeTab === 'insights' && <span>{t('tabInsights') || 'Insights'}</span>}
-        </button>
-
-        {/* 6. Trash */}
-        <button
-          onClick={() => handleTabChange('trash')}
-          title={t('tabTrash') || 'Trash'}
-          className={`relative flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'trash'
-              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
-          }`}
-        >
-          <Trash2 className="size-3.5 shrink-0 text-rose-500" />
-          {activeTab === 'trash' && <span>{t('tabTrash') || 'Trash'}</span>}
-          {trashCount > 0 && <span className="size-1.5 shrink-0 rounded-full bg-rose-500" />}
+          <span
+            className={`tab-label overflow-hidden whitespace-nowrap transition-[max-width,opacity,margin] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              isTabLabelVisible('doctor')
+                ? 'ml-1.5 max-w-[96px] opacity-100'
+                : 'ml-0 max-w-0 opacity-0'
+            }`}
+          >
+            {t('tabDoctor') || 'Doctor'}
+          </span>
         </button>
       </nav>
 
-      <main className="flex flex-1 flex-col">
-        {pendingSuggestions.length > 0 && (
-          <PendingSuggestionCard
-            suggestions={pendingSuggestions}
-            onApply={handleApplySuggestion}
-            onApplyAll={handleApplyAll}
-            onDismiss={handleDismissSuggestion}
-            onDismissAll={handleDismissAll}
-            isApplying={isApplyingSuggestion}
-          />
-        )}
-
-        {/* Tab 1: Recent */}
-        {visitedTabs.has('recent') && (
-          <div className={activeTab === 'recent' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <RecentBookmarks onBookmarkChanged={refreshState} onOpenSettings={handleOpenSettings} />
-          </div>
-        )}
-
-        {/* Tab 2: Explorer */}
-        {visitedTabs.has('explorer') && (
-          <div className={activeTab === 'explorer' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Suspense fallback={<TabFallback />}>
-              <Explorer onBookmarkChanged={refreshState} initialSearchQuery={explorerSearchQuery} />
-            </Suspense>
-          </div>
-        )}
-
-        {/* Tab 3: Copilot (State preserved across tab navigation) */}
-        {visitedTabs.has('copilot') && (
-          <div className={activeTab === 'copilot' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Suspense fallback={<TabFallback />}>
-              <AICopilot onPlanApplied={handlePlanApplied} onOpenSettings={handleOpenSettings} />
-            </Suspense>
-          </div>
-        )}
-
-        {/* Tab 4: Doctor (Health checks & subtab state preserved) */}
-        {visitedTabs.has('doctor') && (
-          <div className={activeTab === 'doctor' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Suspense fallback={<TabFallback />}>
-              <Doctor onFixed={refreshState} initialSubTab={doctorSubTab} />
-            </Suspense>
-          </div>
-        )}
-
-        {/* Tab 5: Insights */}
-        {visitedTabs.has('insights') && (
-          <div className={activeTab === 'insights' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Suspense fallback={<TabFallback />}>
-              <Insights
-                onNavigateToDoctor={handleNavigateToDoctor}
-                onNavigateToCopilot={handleNavigateToCopilot}
-                onNavigateToExplorer={handleNavigateToExplorer}
+      <main className="relative flex flex-1 flex-col">
+        {isTrashOpen ? (
+          <Suspense fallback={<TabFallback />}>
+            <RecycleBin onRestored={refreshState} onClose={handleCloseTrash} />
+          </Suspense>
+        ) : (
+          <>
+            {pendingSuggestions.length > 0 && (
+              <PendingSuggestionCard
+                suggestions={pendingSuggestions}
+                onApply={handleApplySuggestion}
+                onApplyAll={handleApplyAll}
+                onDismiss={handleDismissSuggestion}
+                onDismissAll={handleDismissAll}
+                isApplying={isApplyingSuggestion}
               />
-            </Suspense>
-          </div>
-        )}
+            )}
 
-        {/* Tab 6: Recycle Bin */}
-        {visitedTabs.has('trash') && (
-          <div className={activeTab === 'trash' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Suspense fallback={<TabFallback />}>
-              <RecycleBin onRestored={refreshState} />
-            </Suspense>
-          </div>
+            {/* Tab 1: Inbox */}
+            {visitedTabs.has('inbox') && (
+              <div className={activeTab === 'inbox' ? 'flex flex-1 flex-col' : 'hidden'}>
+                <RecentBookmarks
+                  onBookmarkChanged={refreshState}
+                  onOpenSettings={handleOpenSettings}
+                />
+              </div>
+            )}
+
+            {/* Tab 2: Library */}
+            {visitedTabs.has('library') && (
+              <div className={activeTab === 'library' ? 'flex flex-1 flex-col' : 'hidden'}>
+                <Suspense fallback={<TabFallback />}>
+                  <Explorer
+                    onBookmarkChanged={refreshState}
+                    initialSearchQuery={librarySearchQuery}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {/* Tab 3: Copilot (State preserved across tab navigation) */}
+            {visitedTabs.has('copilot') && (
+              <div className={activeTab === 'copilot' ? 'flex flex-1 flex-col' : 'hidden'}>
+                <Suspense fallback={<TabFallback />}>
+                  <AICopilot
+                    onPlanApplied={handlePlanApplied}
+                    onOpenSettings={handleOpenSettings}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {/* Tab 4: Doctor (Includes Overview + Health checks) */}
+            {visitedTabs.has('doctor') && (
+              <div className={activeTab === 'doctor' ? 'flex flex-1 flex-col' : 'hidden'}>
+                <Suspense fallback={<TabFallback />}>
+                  <Doctor
+                    onFixed={refreshState}
+                    initialSubTab={doctorSubTab}
+                    onNavigateToLibrary={handleNavigateToLibrary}
+                  />
+                </Suspense>
+              </div>
+            )}
+          </>
         )}
       </main>
 
