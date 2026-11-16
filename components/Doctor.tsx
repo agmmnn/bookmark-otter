@@ -18,6 +18,10 @@ import {
   ShieldCheck,
   ShieldAlert,
   Lock,
+  Search,
+  X,
+  Clock,
+  Info,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -25,7 +29,9 @@ import { browser } from 'wxt/browser';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
+import { formatFolderTitle, formatShortFolderPath } from '@/lib/utils';
 import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import {
   findDuplicates,
@@ -42,7 +48,10 @@ import {
   findInsecureHttpBookmarks,
   upgradeBookmarkToHttps,
   upgradeMultipleBookmarksToHttps,
+  restoreBookmarkUrls,
+  verifyHttpsSupportBatch,
 } from '@/services/cleaner';
+import { restoreRecentTrashItems } from '@/services/trash';
 import type {
   DuplicateGroup,
   EmptyFolder,
@@ -51,7 +60,6 @@ import type {
   SimilarGroup,
   TrackingCleanItem,
   TrackingCleanOptions,
-  BookmarkTreeNode,
 } from '@/types';
 
 export type DoctorSubTab =
@@ -72,7 +80,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   onFixed,
   initialSubTab = 'duplicates',
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const normalizeSubTab = (
     tab: DoctorSubTab
   ): 'duplicates' | 'similar' | 'trackers' | 'insecure' | 'broken' | 'empty' =>
@@ -104,14 +112,16 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   // Data states
   const [isLoading, setIsLoading] = useState(true);
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
+  const [confirmCleanDuplicates, setConfirmCleanDuplicates] = useState(false);
   const [emptyFolders, setEmptyFolders] = useState<EmptyFolder[]>([]);
+  const [confirmCleanEmpty, setConfirmCleanEmpty] = useState(false);
   const [allBookmarks, setAllBookmarks] = useState<FlatBookmark[]>([]);
-  const [rawBookmarkTree, setRawBookmarkTree] = useState<BookmarkTreeNode[]>([]);
 
   // Similar bookmarks state
   const [similarGroups, setSimilarGroups] = useState<SimilarGroup[]>([]);
   const [selectedSimilarIds, setSelectedSimilarIds] = useState<Set<string>>(new Set());
   const [isDeletingSimilar, setIsDeletingSimilar] = useState(false);
+  const [confirmDeleteSimilar, setConfirmDeleteSimilar] = useState(false);
 
   // Tracking parameters state
   const [trackingItems, setTrackingItems] = useState<TrackingCleanItem[]>([]);
@@ -134,15 +144,34 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     total: number;
   } | null>(null);
   const [upgradingSingleId, setUpgradingSingleId] = useState<string | null>(null);
+  const [httpsVerifyMap, setHttpsVerifyMap] = useState<Map<string, boolean>>(new Map());
+  const [isVerifyingHttps, setIsVerifyingHttps] = useState(false);
+  const [verifyHttpsProgress, setVerifyHttpsProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const [httpSearchQuery, setHttpSearchQuery] = useState('');
+  const [visibleHttpCount, setVisibleHttpCount] = useState(30);
 
   // Broken link scanner state
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, currentUrl: '' });
   const [brokenLinks, setBrokenLinks] = useState<BrokenLinkResult[]>([]);
   const [hasScannedBroken, setHasScannedBroken] = useState(false);
+  const [lastScannedAt, setLastScannedAt] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem('last_broken_scan');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed?.timestamp === 'number') return parsed.timestamp;
+      }
+    } catch {}
+    return null;
+  });
   const [dismissedBrokenIds, setDismissedBrokenIds] = useState<Set<string>>(new Set());
-  const [brokenFilter, setBrokenFilter] = useState<'all' | '404' | '5xx' | 'timeout'>('all');
+  const [brokenFilter, setBrokenFilter] = useState<'all' | '404' | '5xx' | 'unverified'>('all');
   const [isRemovingBroken, setIsRemovingBroken] = useState(false);
+  const [confirmRemoveBroken, setConfirmRemoveBroken] = useState(false);
   const [removingBrokenProgress, setRemovingBrokenProgress] = useState<{
     current: number;
     total: number;
@@ -150,15 +179,50 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const [deletingBrokenId, setDeletingBrokenId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const showToast = (msg: string, onUndo?: () => Promise<void>) => {
+    if (onUndo) {
+      toast.success(msg, {
+        action: {
+          label: t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo'),
+          onClick: () => {
+            onUndo();
+          },
+        },
+      });
+    } else {
+      toast.success(msg);
+    }
+  };
+
+  const formatItemDate = (timestamp?: number) => {
+    if (!timestamp || timestamp <= 0) return '';
+    try {
+      return new Date(timestamp).toLocaleDateString(lang === 'tr' ? 'tr-TR' : 'en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return '';
+    }
+  };
+
   const handleDismissBroken = (bookmarkId: string) => {
     setDismissedBrokenIds((prev) => new Set([...prev, bookmarkId]));
-    showToast('Dismissed bookmark from broken list');
+    showToast(
+      lang === 'tr' ? 'Yer imi listeden gizlendi' : 'Ignored bookmark (hidden from broken list)'
+    );
   };
+
+  const isConfirmedBroken = (b: BrokenLinkResult) =>
+    b.statusCode === 404 || b.statusCode === 410 || Boolean(b.statusCode && b.statusCode >= 500);
 
   const count404 = useMemo(
     () =>
-      brokenLinks.filter((b) => !dismissedBrokenIds.has(b.bookmark.id) && b.statusCode === 404)
-        .length,
+      brokenLinks.filter(
+        (b) =>
+          !dismissedBrokenIds.has(b.bookmark.id) && (b.statusCode === 404 || b.statusCode === 410)
+      ).length,
     [brokenLinks, dismissedBrokenIds]
   );
 
@@ -170,23 +234,24 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     [brokenLinks, dismissedBrokenIds]
   );
 
-  const countTimeout = useMemo(
+  const countUnverified = useMemo(
     () =>
-      brokenLinks.filter(
-        (b) =>
-          !dismissedBrokenIds.has(b.bookmark.id) &&
-          (!b.statusCode || (b.statusCode !== 404 && b.statusCode < 500))
-      ).length,
+      brokenLinks.filter((b) => !dismissedBrokenIds.has(b.bookmark.id) && !isConfirmedBroken(b))
+        .length,
+    [brokenLinks, dismissedBrokenIds]
+  );
+
+  const confirmedBrokenLinks = useMemo(
+    () => brokenLinks.filter((b) => !dismissedBrokenIds.has(b.bookmark.id) && isConfirmedBroken(b)),
     [brokenLinks, dismissedBrokenIds]
   );
 
   const activeBrokenLinks = useMemo(() => {
     return brokenLinks.filter((item) => {
       if (dismissedBrokenIds.has(item.bookmark.id)) return false;
-      if (brokenFilter === '404') return item.statusCode === 404;
+      if (brokenFilter === '404') return item.statusCode === 404 || item.statusCode === 410;
       if (brokenFilter === '5xx') return Boolean(item.statusCode && item.statusCode >= 500);
-      if (brokenFilter === 'timeout')
-        return !item.statusCode || (item.statusCode !== 404 && item.statusCode < 500);
+      if (brokenFilter === 'unverified') return !isConfirmedBroken(item);
       return true;
     });
   }, [brokenLinks, dismissedBrokenIds, brokenFilter]);
@@ -197,15 +262,10 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const showToast = (msg: string) => {
-    toast.success(msg);
-  };
-
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
       const tree = await getBookmarkTree();
-      setRawBookmarkTree(tree);
       // Flatten ONCE and reuse across all scanners for 5x CPU performance gain
       const flats = flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'));
       const dups = findDuplicates(flats);
@@ -246,7 +306,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     setDuplicates((prev) => prev.filter((g) => g.normalizedUrl !== group.normalizedUrl));
     showToast(
       t('duplicatesCleanedMsg', { count: removedCount }) ||
-        `Removed ${removedCount} duplicate(s) (kept ${keepMode}). Moved to Recycle Bin.`
+        `Removed ${removedCount} duplicate(s) (kept ${keepMode}). Moved to Recycle Bin.`,
+      async () => {
+        await restoreRecentTrashItems(removedCount);
+        await loadData();
+        onFixed?.();
+      }
     );
     if (onFixed) onFixed();
   };
@@ -264,7 +329,11 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         })
         .filter((g) => g.items.length > 1)
     );
-    showToast(t('brokenLinkRemoved') || 'Removed duplicate to Recycle Bin');
+    showToast(t('brokenLinkRemoved') || 'Removed duplicate to Recycle Bin', async () => {
+      await restoreRecentTrashItems(1);
+      await loadData();
+      onFixed?.();
+    });
     if (onFixed) onFixed();
   };
 
@@ -275,9 +344,15 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       totalRemoved += count;
     }
     setDuplicates([]);
+    setConfirmCleanDuplicates(false);
     showToast(
       t('allDuplicatesCleaned', { count: totalRemoved }) ||
-        `Cleaned ${totalRemoved} duplicates! Backed up in Recycle Bin.`
+        `Cleaned ${totalRemoved} duplicates! Backed up in Recycle Bin.`,
+      async () => {
+        await restoreRecentTrashItems(totalRemoved);
+        await loadData();
+        onFixed?.();
+      }
     );
     if (onFixed) onFixed();
   };
@@ -355,7 +430,15 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           .filter((g) => g.items.length > 1)
       );
       setSelectedSimilarIds(new Set());
-      showToast(t('brokenLinkRemoved') || `Moved ${count} bookmark(s) to Recycle Bin.`);
+      setConfirmDeleteSimilar(false);
+      showToast(
+        t('brokenLinkRemoved') || `Moved ${count} bookmark(s) to Recycle Bin.`,
+        async () => {
+          await restoreRecentTrashItems(count);
+          await loadData();
+          onFixed?.();
+        }
+      );
       if (onFixed) onFixed();
     } catch (err) {
       console.error('Failed to delete selected similar bookmarks:', err);
@@ -379,7 +462,11 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       next.delete(item.id);
       return next;
     });
-    showToast(t('brokenLinkRemoved') || 'Moved bookmark to Recycle Bin');
+    showToast(t('brokenLinkRemoved') || 'Moved bookmark to Recycle Bin', async () => {
+      await restoreRecentTrashItems(1);
+      await loadData();
+      onFixed?.();
+    });
     if (onFixed) onFixed();
   };
 
@@ -387,40 +474,48 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const handleToggleTrackingOption = (key: keyof TrackingCleanOptions) => {
     const updated = { ...trackingOptions, [key]: !trackingOptions[key] };
     setTrackingOptions(updated);
-    if (rawBookmarkTree.length > 0) {
-      const freshTrackers = findTrackingParameters(rawBookmarkTree, updated);
+    if (allBookmarks.length > 0) {
+      const freshTrackers = findTrackingParameters(allBookmarks, updated);
       setTrackingItems(freshTrackers);
     }
   };
 
   const siteSpecificCount = useMemo(() => {
-    if (rawBookmarkTree.length === 0) return 0;
-    const all = findTrackingParameters(rawBookmarkTree, {
+    if (allBookmarks.length === 0) return 0;
+    const all = findTrackingParameters(allBookmarks, {
       includeSiteSpecific: true,
       includeAffiliate: true,
     });
     return all.filter((item) =>
       item.segments.some((s) => s.isRemoved && s.type === 'site-specific')
     ).length;
-  }, [rawBookmarkTree]);
+  }, [allBookmarks]);
 
   const affiliateCount = useMemo(() => {
-    if (rawBookmarkTree.length === 0) return 0;
-    const all = findTrackingParameters(rawBookmarkTree, {
+    if (allBookmarks.length === 0) return 0;
+    const all = findTrackingParameters(allBookmarks, {
       includeSiteSpecific: true,
       includeAffiliate: true,
     });
     return all.filter((item) => item.segments.some((s) => s.isRemoved && s.type === 'affiliate'))
       .length;
-  }, [rawBookmarkTree]);
+  }, [allBookmarks]);
 
   const handleCleanSingleTracker = async (item: TrackingCleanItem) => {
     setCleaningSingleTrackerId(item.bookmark.id);
+    const prevUrl = item.originalUrl;
     try {
       const ok = await cleanBookmarkUrl(item.bookmark.id, item.cleanUrl);
       if (ok) {
         setTrackingItems((prev) => prev.filter((it) => it.bookmark.id !== item.bookmark.id));
-        showToast(t('cleanedUrlsSuccess', { count: 1 }) || 'Bookmark URL cleaned!');
+        setAllBookmarks((prev) =>
+          prev.map((b) => (b.id === item.bookmark.id ? { ...b, url: item.cleanUrl } : b))
+        );
+        showToast(t('cleanedUrlsSuccess', { count: 1 }) || 'Bookmark URL cleaned!', async () => {
+          await restoreBookmarkUrls([{ id: item.bookmark.id, originalUrl: prevUrl }]);
+          await loadData();
+          onFixed?.();
+        });
         if (onFixed) onFixed();
       }
     } catch (err) {
@@ -434,6 +529,10 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     if (trackingItems.length === 0 || isCleaningTrackers) return;
     setIsCleaningTrackers(true);
     setCleanTrackersProgress({ current: 0, total: trackingItems.length });
+    const previousItems = trackingItems.map((it) => ({
+      id: it.bookmark.id,
+      originalUrl: it.originalUrl,
+    }));
     try {
       const itemsToClean = trackingItems.map((it) => ({
         id: it.bookmark.id,
@@ -444,11 +543,15 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       );
       setTrackingItems([]);
       showToast(
-        t('cleanedUrlsSuccess', { count }) || `Cleaned ${count} bookmark URLs successfully.`
+        t('cleanedUrlsSuccess', { count }) || `Cleaned ${count} bookmark URLs successfully.`,
+        async () => {
+          await restoreBookmarkUrls(previousItems);
+          await loadData();
+          onFixed?.();
+        }
       );
       if (onFixed) onFixed();
-      const tree = await getBookmarkTree();
-      setRawBookmarkTree(tree);
+      await loadData();
     } catch (err) {
       console.error('Failed to clean all tracking parameters:', err);
     } finally {
@@ -458,13 +561,66 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   };
 
   // --- Insecure HTTP Actions ---
+  const filteredInsecureBookmarks = useMemo(() => {
+    const q = httpSearchQuery.trim().toLowerCase();
+    if (!q) return insecureBookmarks;
+    return insecureBookmarks.filter(
+      (b) =>
+        b.title.toLowerCase().includes(q) ||
+        b.url.toLowerCase().includes(q) ||
+        b.domain.toLowerCase().includes(q) ||
+        b.path.toLowerCase().includes(q)
+    );
+  }, [insecureBookmarks, httpSearchQuery]);
+
+  const visibleInsecureBookmarks = useMemo(
+    () => filteredInsecureBookmarks.slice(0, visibleHttpCount),
+    [filteredInsecureBookmarks, visibleHttpCount]
+  );
+
+  const verifiedHttpItems = useMemo(
+    () => insecureBookmarks.filter((b) => httpsVerifyMap.get(b.id) === true),
+    [insecureBookmarks, httpsVerifyMap]
+  );
+
+  const handleVerifyHttpsSupport = async () => {
+    if (insecureBookmarks.length === 0 || isVerifyingHttps) return;
+    setIsVerifyingHttps(true);
+    setVerifyHttpsProgress({ current: 0, total: insecureBookmarks.length });
+    try {
+      const map = await verifyHttpsSupportBatch(insecureBookmarks, (checked, total) => {
+        setVerifyHttpsProgress({ current: checked, total });
+      });
+      setHttpsVerifyMap(map);
+      const okCount = Array.from(map.values()).filter(Boolean).length;
+      showToast(
+        lang === 'tr'
+          ? `${okCount} / ${insecureBookmarks.length} sitede HTTPS desteği doğrulandı.`
+          : `Verified HTTPS support on ${okCount} of ${insecureBookmarks.length} sites.`
+      );
+    } catch (err) {
+      console.error('Failed to verify HTTPS support:', err);
+    } finally {
+      setIsVerifyingHttps(false);
+      setVerifyHttpsProgress(null);
+    }
+  };
+
   const handleUpgradeSingleHttps = async (item: FlatBookmark) => {
     setUpgradingSingleId(item.id);
+    const prevUrl = item.url;
     try {
       const ok = await upgradeBookmarkToHttps(item.id, item.url);
       if (ok) {
         setInsecureBookmarks((prev) => prev.filter((b) => b.id !== item.id));
-        showToast(t('upgradedHttpsSuccess', { count: 1 }) || 'Upgraded bookmark to HTTPS!');
+        showToast(
+          t('upgradedHttpsSuccess', { count: 1 }) || 'Upgraded bookmark to HTTPS!',
+          async () => {
+            await restoreBookmarkUrls([{ id: item.id, originalUrl: prevUrl }]);
+            await loadData();
+            onFixed?.();
+          }
+        );
         if (onFixed) onFixed();
       }
     } catch (err) {
@@ -475,19 +631,52 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   };
 
   const handleUpgradeAllHttps = async () => {
-    if (insecureBookmarks.length === 0 || isUpgradingHttps) return;
+    if (insecureBookmarks.length === 0 || isUpgradingHttps || isVerifyingHttps) return;
+
+    let currentMap = httpsVerifyMap;
+    if (currentMap.size === 0) {
+      setIsVerifyingHttps(true);
+      setVerifyHttpsProgress({ current: 0, total: insecureBookmarks.length });
+      try {
+        currentMap = await verifyHttpsSupportBatch(insecureBookmarks, (checked, total) => {
+          setVerifyHttpsProgress({ current: checked, total });
+        });
+        setHttpsVerifyMap(currentMap);
+      } finally {
+        setIsVerifyingHttps(false);
+        setVerifyHttpsProgress(null);
+      }
+    }
+
+    const targets = insecureBookmarks.filter((b) => currentMap.get(b.id) === true);
+    if (targets.length === 0) {
+      showToast(
+        lang === 'tr'
+          ? 'HTTPS destekleyen doğrulanmış site bulunamadı.'
+          : 'No verified HTTPS-supported sites found to upgrade.'
+      );
+      return;
+    }
+
+    const previousUrls = targets.map((b) => ({ id: b.id, originalUrl: b.url }));
     setIsUpgradingHttps(true);
-    setUpgradeHttpsProgress({ current: 0, total: insecureBookmarks.length });
+    setUpgradeHttpsProgress({ current: 0, total: targets.length });
     try {
-      const items = insecureBookmarks.map((b) => ({ id: b.id, url: b.url }));
+      const items = targets.map((b) => ({ id: b.id, url: b.url }));
       const count = await upgradeMultipleBookmarksToHttps(items, (current, total) => {
         setUpgradeHttpsProgress({ current, total });
       });
-      setInsecureBookmarks([]);
-      showToast(t('upgradedHttpsSuccess', { count }) || `Upgraded ${count} bookmark(s) to HTTPS!`);
+      const upgradedIds = new Set(targets.map((t) => t.id));
+      setInsecureBookmarks((prev) => prev.filter((b) => !upgradedIds.has(b.id)));
+      showToast(
+        t('upgradedHttpsSuccess', { count }) || `Upgraded ${count} verified bookmark(s) to HTTPS!`,
+        async () => {
+          await restoreBookmarkUrls(previousUrls);
+          await loadData();
+          onFixed?.();
+        }
+      );
       if (onFixed) onFixed();
-      const tree = await getBookmarkTree();
-      setRawBookmarkTree(tree);
     } catch (err) {
       console.error('Failed to upgrade all bookmarks to HTTPS:', err);
     } finally {
@@ -498,13 +687,19 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
   const handleDismissInsecure = (bookmarkId: string) => {
     setInsecureBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
-    showToast('Dismissed bookmark from insecure list');
+    showToast(
+      lang === 'tr' ? 'Yer imi listeden gizlendi' : 'Ignored bookmark (hidden from HTTP list)'
+    );
   };
 
   const handleRemoveInsecure = async (item: FlatBookmark) => {
     await removeBookmarkWithTrash(item);
     setInsecureBookmarks((prev) => prev.filter((b) => b.id !== item.id));
-    showToast(t('brokenLinkRemoved') || 'Removed link to Recycle Bin');
+    showToast(t('brokenLinkRemoved') || 'Removed link to Recycle Bin', async () => {
+      await restoreRecentTrashItems(1);
+      await loadData();
+      onFixed?.();
+    });
     if (onFixed) onFixed();
   };
 
@@ -514,6 +709,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     setIsScanning(true);
     setHasScannedBroken(true);
     setBrokenLinks([]);
+    setConfirmRemoveBroken(false);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -532,6 +728,15 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         8 // concurrency
       );
       setBrokenLinks(results);
+      const now = Date.now();
+      setLastScannedAt(now);
+      const confirmedCount = results.filter((r) => isConfirmedBroken(r)).length;
+      try {
+        localStorage.setItem(
+          'last_broken_scan',
+          JSON.stringify({ timestamp: now, brokenCount: confirmedCount })
+        );
+      } catch {}
     } catch (err) {
       console.warn('Scan aborted or failed:', err);
     } finally {
@@ -553,21 +758,29 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     try {
       await removeBookmarkWithTrash(item.bookmark);
       setBrokenLinks((prev) => prev.filter((b) => b.bookmark.id !== item.bookmark.id));
-      showToast(t('brokenLinkRemoved') || `Removed "${item.bookmark.title}" to Recycle Bin`);
+      showToast(
+        t('brokenLinkRemoved') || `Removed "${item.bookmark.title}" to Recycle Bin`,
+        async () => {
+          await restoreRecentTrashItems(1);
+          await loadData();
+          onFixed?.();
+        }
+      );
       if (onFixed) onFixed();
     } finally {
       setDeletingBrokenId(null);
     }
   };
 
-  const handleRemoveBrokenBatch = async (onlyFiltered = false) => {
+  const handleRemoveBrokenBatch = async () => {
     if (isRemovingBroken) return;
-    const targets = onlyFiltered
-      ? activeBrokenLinks
-      : brokenLinks.filter((b) => !dismissedBrokenIds.has(b.bookmark.id));
+    // Exclude unverified (CORS/blocked) links from Remove All for safety
+    const targets =
+      brokenFilter === '404' || brokenFilter === '5xx' ? activeBrokenLinks : confirmedBrokenLinks;
     if (targets.length === 0) return;
 
     setIsRemovingBroken(true);
+    setConfirmRemoveBroken(false);
     setRemovingBrokenProgress({ current: 0, total: targets.length });
 
     try {
@@ -583,7 +796,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
       showToast(
         t('allBrokenRemoved', { count: removedCount }) ||
-          `Removed ${removedCount} broken link(s). Backed up in Recycle Bin.`
+          `Removed ${removedCount} broken link(s). Backed up in Recycle Bin.`,
+        async () => {
+          await restoreRecentTrashItems(removedCount);
+          await loadData();
+          onFixed?.();
+        }
       );
       if (onFixed) onFixed();
     } catch (err) {
@@ -599,7 +817,14 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
     const ok = await removeEmptyFolder(folder);
     if (ok) {
       setEmptyFolders((prev) => prev.filter((f) => f.id !== folder.id));
-      showToast(t('folderRemoved') || `Removed empty folder "${folder.title}" to Recycle Bin`);
+      showToast(
+        t('folderRemoved') || `Removed empty folder "${folder.title}" to Recycle Bin`,
+        async () => {
+          await restoreRecentTrashItems(1);
+          await loadData();
+          onFixed?.();
+        }
+      );
       if (onFixed) onFixed();
     }
   };
@@ -611,9 +836,15 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       if (ok) count++;
     }
     setEmptyFolders([]);
+    setConfirmCleanEmpty(false);
     showToast(
       t('allEmptyFoldersCleaned', { count }) ||
-        `Cleaned ${count} empty folders. Backed up in Recycle Bin.`
+        `Cleaned ${count} empty folders. Backed up in Recycle Bin.`,
+      async () => {
+        await restoreRecentTrashItems(count);
+        await loadData();
+        onFixed?.();
+      }
     );
     if (onFixed) onFixed();
   };
@@ -621,7 +852,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const totalDuplicateBookmarks = duplicates.reduce((acc, g) => acc + (g.items.length - 1), 0);
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col space-y-4 p-4">
+    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
       {/* Header */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
         <div>
@@ -629,7 +860,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
             <h2 className="text-foreground text-sm font-semibold tracking-tight">
               {t('doctorTitle') || 'Bookmark Doctor'}
             </h2>
-            <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px] font-medium">
+            <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-medium">
               {duplicates.length +
                 emptyFolders.length +
                 brokenLinks.length +
@@ -655,19 +886,21 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         </Button>
       </div>
 
-      {/* Subtab Segmented Control */}
-      <div className="bg-muted/30 border-border/60 grid grid-cols-6 gap-0.5 rounded-lg border p-1 select-none">
+      {/* Subtab Segmented Control — Active tab shows label, inactive tabs show icon + badge + tooltip */}
+      <div className="bg-muted/30 border-border/60 flex items-center gap-1 rounded-lg border p-1 select-none">
         <button
           onClick={() => handleSubTabChange('duplicates')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'duplicates'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground'
+              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={t('tabDuplicates') || 'Duplicates'}
         >
-          <Copy className="size-3 shrink-0 text-amber-500" />
-          <span className="truncate text-[11px]">{t('tabDuplicates') || 'Duplicates'}</span>
+          <Copy className="size-3.5 shrink-0 text-amber-500" />
+          {subTab === 'duplicates' && (
+            <span className="truncate text-[11px]">{t('tabDuplicates') || 'Duplicates'}</span>
+          )}
           {totalDuplicateBookmarks > 0 && (
             <Badge
               variant="secondary"
@@ -680,15 +913,17 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
         <button
           onClick={() => handleSubTabChange('similar')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'similar'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground'
+              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
-          title={t('tabSimilar') || 'Similar'}
+          title={t('tabSimilar') || 'Similar Bookmarks'}
         >
-          <Layers className="size-3 shrink-0 text-cyan-500" />
-          <span className="truncate text-[11px]">{t('tabSimilar') || 'Similar'}</span>
+          <Layers className="size-3.5 shrink-0 text-cyan-500" />
+          {subTab === 'similar' && (
+            <span className="truncate text-[11px]">{t('tabSimilar') || 'Similar'}</span>
+          )}
           {similarGroups.length > 0 && (
             <Badge
               variant="secondary"
@@ -701,15 +936,17 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
         <button
           onClick={() => handleSubTabChange('trackers')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'trackers'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground'
+              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
-          title={t('tabTrackers') || 'Trackers'}
+          title={t('tabTrackers') || 'Tracking Parameters'}
         >
-          <ShieldCheck className="size-3 shrink-0 text-teal-500" />
-          <span className="truncate text-[11px]">{t('tabTrackers') || 'Trackers'}</span>
+          <ShieldCheck className="size-3.5 shrink-0 text-teal-500" />
+          {subTab === 'trackers' && (
+            <span className="truncate text-[11px]">{t('tabTrackers') || 'Trackers'}</span>
+          )}
           {trackingItems.length > 0 && (
             <Badge
               variant="secondary"
@@ -722,15 +959,21 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
         <button
           onClick={() => handleSubTabChange('insecure')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'insecure'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground'
+              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
-          title={t('tabInsecure') || 'Insecure HTTP'}
+          title={
+            lang === 'tr'
+              ? 'HTTP: Şifresiz (http://) bağlantılar — site çalışıyor olabilir ancak HTTPS kullanmıyor'
+              : 'Insecure HTTP: Unencrypted (http://) protocol — site works but does not use HTTPS'
+          }
         >
-          <ShieldAlert className="size-3 shrink-0 text-amber-500" />
-          <span className="truncate text-[11px]">{t('tabInsecure') || 'HTTP'}</span>
+          <ShieldAlert className="size-3.5 shrink-0 text-amber-500" />
+          {subTab === 'insecure' && (
+            <span className="truncate text-[11px]">{t('tabInsecure') || 'HTTP'}</span>
+          )}
           {insecureBookmarks.length > 0 && (
             <Badge
               variant="secondary"
@@ -743,36 +986,44 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
         <button
           onClick={() => handleSubTabChange('broken')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'broken'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground'
+              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
-          title={t('tabBroken') || '404 Links'}
+          title={
+            lang === 'tr'
+              ? '404 Kırık Linkler: Silinmiş veya ulaşılamayan (404/5xx) ölü sayfalar'
+              : '404 Broken Links: Dead or missing (404/5xx) pages that no longer exist'
+          }
         >
-          <Link2Off className="size-3 shrink-0 text-rose-500" />
-          <span className="truncate text-[11px]">{t('tabBroken') || '404'}</span>
-          {brokenLinks.length > 0 && (
+          <Link2Off className="size-3.5 shrink-0 text-rose-500" />
+          {subTab === 'broken' && (
+            <span className="truncate text-[11px]">{t('tabBroken') || '404'}</span>
+          )}
+          {confirmedBrokenLinks.length > 0 && (
             <Badge
               variant="destructive"
               className="h-3.5 shrink-0 px-1 py-0 text-[8.5px] font-semibold"
             >
-              {brokenLinks.length}
+              {confirmedBrokenLinks.length}
             </Badge>
           )}
         </button>
 
         <button
           onClick={() => handleSubTabChange('empty')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             subTab === 'empty'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground'
+              ? 'bg-card text-foreground border-border/70 flex-[1.7] border px-2 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground flex-1 px-1'
           }`}
           title={t('tabEmptyFolders') || 'Empty Folders'}
         >
-          <FolderX className="size-3 shrink-0 text-blue-500" />
-          <span className="truncate text-[11px]">{t('tabEmptyFolders') || 'Empty'}</span>
+          <FolderX className="size-3.5 shrink-0 text-blue-500" />
+          {subTab === 'empty' && (
+            <span className="truncate text-[11px]">{t('tabEmptyFolders') || 'Empty'}</span>
+          )}
           {emptyFolders.length > 0 && (
             <Badge
               variant="secondary"
@@ -788,7 +1039,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       {visitedSubTabs.has('duplicates') && (
         <div className={subTab === 'duplicates' ? 'space-y-3' : 'hidden'}>
           {duplicates.length > 0 && (
-            <div className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
               <div className="text-xs">
                 <span className="font-semibold text-amber-700 dark:text-amber-300">
                   {totalDuplicateBookmarks}{' '}
@@ -800,15 +1051,38 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </p>
               </div>
 
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleCleanAllDuplicates}
-                className="h-7 border-amber-500/40 text-xs font-medium text-amber-700 hover:bg-amber-500/20 active:scale-[0.97] dark:text-amber-300"
-              >
-                <Sparkles className="mr-1 size-3" />
-                {t('cleanAllDuplicatesBtn') || 'Clean All (Keep Newest)'}
-              </Button>
+              {confirmCleanDuplicates ? (
+                <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleCleanAllDuplicates}
+                    className="h-7 px-2.5 text-xs font-medium active:scale-[0.97]"
+                  >
+                    {lang === 'tr'
+                      ? `Onayla (${totalDuplicateBookmarks} sil)`
+                      : `Confirm (${totalDuplicateBookmarks})`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmCleanDuplicates(false)}
+                    className="h-7 px-2 text-xs"
+                  >
+                    {t('cancelBtn') || 'Cancel'}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setConfirmCleanDuplicates(true)}
+                  className="h-7 border-amber-500/40 text-xs font-medium text-amber-700 hover:bg-amber-500/20 active:scale-[0.97] dark:text-amber-300"
+                >
+                  <Sparkles className="mr-1 size-3" />
+                  {t('cleanAllDuplicatesBtn') || 'Clean All (Keep Newest)'}
+                </Button>
+              )}
             </div>
           )}
 
@@ -859,7 +1133,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                         </span>
                         <Badge
                           variant="secondary"
-                          className="h-4 px-1.5 py-0 font-mono text-[9.5px] font-medium"
+                          className="h-4 shrink-0 px-1.5 py-0 text-[9.5px] font-medium"
                         >
                           {group.items.length} copies
                         </Badge>
@@ -875,33 +1149,56 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                       </Button>
                     </div>
 
-                    {/* Compact Flat List of copies */}
+                    {/* Detailed List of copies (Title, Folder Path, Date Added, Full URL) */}
                     <div className="divide-border/30 divide-y text-xs">
                       {visibleItems.map((item, itemIdx) => (
                         <div
                           key={item.id}
-                          className={`group flex items-center justify-between gap-2 px-3 py-1.5 transition-colors ${
+                          className={`group flex items-start justify-between gap-2 px-3 py-2 transition-colors ${
                             itemIdx === 0 ? 'bg-emerald-500/5' : 'hover:bg-muted/30'
                           }`}
                         >
-                          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                            {itemIdx === 0 ? (
-                              <Badge
-                                variant="outline"
-                                className="h-3.5 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1 py-0 text-[8.5px] font-medium text-emerald-600 dark:text-emerald-400"
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {itemIdx === 0 ? (
+                                <Badge
+                                  variant="outline"
+                                  className="h-3.5 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1 py-0 text-[8.5px] font-medium text-emerald-600 dark:text-emerald-400"
+                                >
+                                  {t('newestBadge') || 'Newest'}
+                                </Badge>
+                              ) : (
+                                <span className="bg-muted-foreground/40 ml-1 size-1.5 shrink-0 rounded-full" />
+                              )}
+                              <span
+                                className="text-foreground truncate text-[11px] font-medium"
+                                title={item.title || item.url}
                               >
-                                {t('newestBadge') || 'Newest'}
-                              </Badge>
-                            ) : (
-                              <span className="bg-muted-foreground/40 ml-1 size-1 shrink-0 rounded-full" />
-                            )}
+                                {item.title || item.domain}
+                              </span>
+                            </div>
 
-                            <span className="text-muted-foreground truncate text-[11px] select-none">
-                              📁 {item.path}
-                            </span>
+                            <div className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-[10px]">
+                              <span className="max-w-[140px] truncate" title={item.path}>
+                                📁 {formatShortFolderPath(item.path, lang)}
+                              </span>
+                              {item.dateAdded && (
+                                <>
+                                  <span>•</span>
+                                  <span className="shrink-0">{formatItemDate(item.dateAdded)}</span>
+                                </>
+                              )}
+                            </div>
+
+                            <div
+                              className="text-muted-foreground/75 truncate font-mono text-[10px]"
+                              title={item.url}
+                            >
+                              {item.url}
+                            </div>
                           </div>
 
-                          <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100">
+                          <div className="flex shrink-0 items-center gap-1 pt-0.5 opacity-75 transition-opacity group-hover:opacity-100">
                             <a
                               href={item.url}
                               target="_blank"
@@ -951,23 +1248,22 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       {visitedSubTabs.has('similar') && (
         <div className={subTab === 'similar' ? 'space-y-3' : 'hidden'}>
           {/* Header Hero Banner */}
-          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3.5">
+          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="font-mono text-[10px] font-semibold tracking-wider text-cyan-600 uppercase dark:text-cyan-400">
-                  {t('doctorTitle') || 'DOCTOR'} ·{' '}
-                  {t('similarSubtitle') || 'Nearly identical titles or URLs'}
-                </div>
-                <div className="mt-0.5 flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   <Layers className="size-4 shrink-0 text-cyan-500" />
                   <h3 className="text-foreground text-sm font-bold">
                     {t('similarTitle') || 'Similar Bookmarks'}
                   </h3>
-                  <span className="text-muted-foreground font-mono text-xs">
+                  <span className="text-muted-foreground text-xs">
                     {t('similarFound', { count: similarGroups.length }) ||
                       `${similarGroups.length} similarities in total`}
                   </span>
                 </div>
+                <p className="text-muted-foreground mt-0.5 text-[11px]">
+                  {t('similarSubtitle') || 'Bookmarks sharing the same base URL or page path.'}
+                </p>
               </div>
 
               {/* Batch actions when bookmarks are selected */}
@@ -975,7 +1271,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
                   <Badge
                     variant="outline"
-                    className="h-6 border-cyan-500/30 px-2 font-mono text-[10px] text-cyan-600 dark:text-cyan-400"
+                    className="h-6 border-cyan-500/30 px-2 text-[10px] text-cyan-600 dark:text-cyan-400"
                   >
                     {selectedSimilarIds.size} selected
                   </Badge>
@@ -989,20 +1285,45 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                     <ExternalLink className="mr-1 size-3" />
                     {t('openInTabs') || 'Open in Tabs'}
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={handleDeleteSelectedSimilar}
-                    disabled={isDeletingSimilar}
-                    className="h-7 px-2 text-xs active:scale-[0.97]"
-                  >
-                    {isDeletingSimilar ? (
-                      <Loader2 className="mr-1 size-3 animate-spin" />
-                    ) : (
+                  {confirmDeleteSimilar ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={handleDeleteSelectedSimilar}
+                        disabled={isDeletingSimilar}
+                        className="h-7 px-2 text-xs active:scale-[0.97]"
+                      >
+                        {isDeletingSimilar ? (
+                          <Loader2 className="mr-1 size-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="mr-1 size-3" />
+                        )}
+                        {lang === 'tr'
+                          ? `Onayla (${selectedSimilarIds.size})`
+                          : `Confirm (${selectedSimilarIds.size})`}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setConfirmDeleteSimilar(false)}
+                        className="h-7 px-2 text-xs"
+                      >
+                        {t('cancelBtn') || 'Cancel'}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => setConfirmDeleteSimilar(true)}
+                      disabled={isDeletingSimilar}
+                      className="h-7 px-2 text-xs active:scale-[0.97]"
+                    >
                       <Trash2 className="mr-1 size-3" />
-                    )}
-                    {t('deleteSelected') || 'Delete Selected'}
-                  </Button>
+                      {t('deleteSelected') || 'Delete Selected'}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -1022,7 +1343,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   {isAllSimilarSelected ? 'Deselect All' : 'Select All Bookmarks'}
                 </span>
               </label>
-              <span className="text-muted-foreground font-mono text-[10px]">
+              <span className="text-muted-foreground text-[10px]">
                 {similarGroups.reduce((acc, g) => acc + g.items.length, 0)} total links
               </span>
             </div>
@@ -1079,10 +1400,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           {group.baseUrl}
                         </span>
                       </div>
-                      <Badge
-                        variant="outline"
-                        className="h-4 shrink-0 px-1.5 py-0 font-mono text-[9px]"
-                      >
+                      <Badge variant="outline" className="h-4 shrink-0 px-1.5 py-0 text-[9px]">
                         {group.items.length} links
                       </Badge>
                     </div>
@@ -1113,7 +1431,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                                 </div>
                                 <div className="mt-0.5 flex items-center gap-2">
                                   <span
-                                    className="text-muted-foreground/75 max-w-[240px] truncate font-mono text-[10px]"
+                                    className="text-muted-foreground/75 max-w-[210px] truncate font-mono text-[10px]"
                                     title={item.url}
                                   >
                                     {item.url}
@@ -1124,7 +1442,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                                       className="text-muted-foreground border-border/50 h-3.5 max-w-[120px] shrink-0 truncate px-1 py-0 text-[8.5px]"
                                       title={item.path}
                                     >
-                                      📁 {item.path}
+                                      📁 {formatShortFolderPath(item.path, lang)}
                                     </Badge>
                                   )}
                                 </div>
@@ -1167,23 +1485,25 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       {visitedSubTabs.has('trackers') && (
         <div className={subTab === 'trackers' ? 'space-y-3' : 'hidden'}>
           {/* Header Hero Banner */}
-          <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3.5">
+          <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="font-mono text-[10px] font-semibold tracking-wider text-teal-600 uppercase dark:text-teal-400">
-                  {t('doctorTitle') || 'DOCTOR'} ·{' '}
-                  {t('trackersSubtitle') || 'utm_ and other trackers in saved URLs'}
-                </div>
-                <div className="mt-0.5 flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   <ShieldCheck className="size-4 shrink-0 text-teal-500" />
                   <h3 className="text-foreground text-sm font-bold">
                     {t('trackersTitle') || 'Tracking Parameters'}
                   </h3>
-                  <span className="text-muted-foreground font-mono text-xs">
+                  <span className="text-muted-foreground text-xs font-medium">
                     {t('trackersFound', { count: trackingItems.length }) ||
                       `${trackingItems.length} bookmarks will be cleaned`}
                   </span>
                 </div>
+                <p className="text-muted-foreground mt-0.5 text-[11px]">
+                  {t('trackersSubtitle') ||
+                    (lang === 'tr'
+                      ? 'Kaydedilen adreslerdeki utm_, fbclid, gclid ve takip kodlarını temizler.'
+                      : 'Strips utm_, fbclid, gclid, and analytics tracking parameters from saved URLs.')}
+                </p>
               </div>
 
               {/* Clean All Button */}
@@ -1213,22 +1533,24 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
               )}
             </div>
 
-            {/* Options Toggles */}
-            <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-teal-500/15 pt-2.5 text-xs select-none">
+            {/* Options Toggles — Consistent checkboxes & clear names */}
+            <div className="mt-2.5 flex flex-wrap items-center gap-4 border-t border-teal-500/15 pt-2.5 text-xs select-none">
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="checkbox"
                   checked={trackingOptions.includeSiteSpecific}
                   onChange={() => handleToggleTrackingOption('includeSiteSpecific')}
-                  className="border-border size-3.5 cursor-pointer rounded accent-amber-500"
+                  className="border-border size-3.5 cursor-pointer rounded accent-teal-600"
                 />
-                <span className="text-foreground text-[11.5px] font-medium">
-                  {t('siteSpecificClean') || 'Site-specific deep clean'}
+                <span className="text-foreground text-[11px] font-medium">
+                  {lang === 'tr'
+                    ? 'Platform izleme kodları (YouTube, Amazon, X)'
+                    : 'Platform trackers (YouTube, Amazon, X)'}
                 </span>
                 {siteSpecificCount > 0 && (
                   <Badge
                     variant="secondary"
-                    className="h-4 bg-amber-500/15 px-1.5 py-0 font-mono text-[9px] font-semibold text-amber-600 dark:text-amber-400"
+                    className="h-4 bg-teal-500/15 px-1.5 py-0 text-[9px] font-semibold text-teal-700 dark:text-teal-300"
                   >
                     {siteSpecificCount}
                   </Badge>
@@ -1240,31 +1562,22 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   type="checkbox"
                   checked={trackingOptions.includeAffiliate}
                   onChange={() => handleToggleTrackingOption('includeAffiliate')}
-                  className="border-border size-3.5 cursor-pointer rounded accent-purple-500"
+                  className="border-border size-3.5 cursor-pointer rounded accent-teal-600"
                 />
-                <span className="text-foreground text-[11.5px] font-medium">
-                  {t('affiliateTags') || 'Affiliate tags'}
+                <span className="text-foreground text-[11px] font-medium">
+                  {lang === 'tr'
+                    ? 'Satış ortaklığı etiketleri (ref, tag)'
+                    : 'Affiliate referral tags (ref, tag)'}
                 </span>
                 {affiliateCount > 0 && (
                   <Badge
                     variant="secondary"
-                    className="h-4 bg-purple-500/15 px-1.5 py-0 font-mono text-[9px] font-semibold text-purple-600 dark:text-purple-400"
+                    className="h-4 bg-teal-500/15 px-1.5 py-0 text-[9px] font-semibold text-teal-700 dark:text-teal-300"
                   >
                     {affiliateCount}
                   </Badge>
                 )}
               </label>
-            </div>
-
-            {/* Visual Legend */}
-            <div className="text-muted-foreground/85 mt-2 flex flex-wrap items-center gap-1.5 text-[10.5px]">
-              <span className="font-medium text-rose-500 line-through">struck through</span>
-              <span>= will be removed</span>
-              <span>·</span>
-              <span className="font-medium text-amber-500 line-through decoration-dotted">
-                dotted
-              </span>
-              <span>= removed only if its toggle above is on</span>
             </div>
           </div>
 
@@ -1296,7 +1609,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                     className="group border-border/50 bg-card hover:border-border rounded-lg border p-3 shadow-2xs transition-[border-color,background-color] duration-120"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1 space-y-1">
+                      <div className="min-w-0 flex-1 space-y-1.5">
                         {/* Title & Domain */}
                         <div className="flex items-center gap-2">
                           <img
@@ -1316,53 +1629,31 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                               className="text-muted-foreground border-border/50 h-4 max-w-[130px] shrink-0 truncate px-1.5 py-0 text-[9px]"
                               title={item.bookmark.path}
                             >
-                              📁 {item.bookmark.path}
+                              📁 {formatShortFolderPath(item.bookmark.path, lang)}
                             </Badge>
                           )}
                         </div>
 
-                        {/* Strikethrough URL segments */}
-                        <div className="bg-muted/25 border-border/30 rounded border p-1.5 font-mono text-[10.5px] leading-relaxed break-all">
-                          {item.segments.map((seg, idx) => {
-                            if (!seg.isRemoved) {
-                              return (
-                                <span key={idx} className="text-foreground/80">
-                                  {seg.text}
-                                </span>
-                              );
-                            }
-                            if (seg.type === 'site-specific') {
-                              return (
+                        {/* Before -> After URL Preview */}
+                        <div className="bg-muted/25 border-border/30 space-y-1 rounded border p-2 font-mono text-[10px] leading-relaxed break-all">
+                          <div className="text-muted-foreground/85">
+                            {item.segments.map((seg, idx) =>
+                              seg.isRemoved ? (
                                 <span
                                   key={idx}
-                                  className="rounded-xs bg-amber-500/10 px-0.5 font-semibold text-amber-600 line-through decoration-dotted dark:text-amber-400"
-                                  title="Site-specific tracking parameter"
+                                  className="rounded-xs bg-rose-500/15 px-0.5 font-semibold text-rose-600 line-through dark:text-rose-400"
                                 >
                                   {seg.text}
                                 </span>
-                              );
-                            }
-                            if (seg.type === 'affiliate') {
-                              return (
-                                <span
-                                  key={idx}
-                                  className="rounded-xs bg-purple-500/10 px-0.5 font-semibold text-purple-600 line-through decoration-dashed dark:text-purple-400"
-                                  title="Affiliate referral parameter"
-                                >
-                                  {seg.text}
-                                </span>
-                              );
-                            }
-                            return (
-                              <span
-                                key={idx}
-                                className="rounded-xs bg-rose-500/10 px-0.5 font-semibold text-rose-600 line-through dark:text-rose-400"
-                                title="Universal tracking parameter"
-                              >
-                                {seg.text}
-                              </span>
-                            );
-                          })}
+                              ) : (
+                                <span key={idx}>{seg.text}</span>
+                              )
+                            )}
+                          </div>
+                          <div className="flex items-start gap-1 text-emerald-600 dark:text-emerald-400">
+                            <span className="shrink-0 font-sans font-bold">→</span>
+                            <span className="font-medium break-all">{item.cleanUrl}</span>
+                          </div>
                         </div>
                       </div>
 
@@ -1397,60 +1688,135 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       {visitedSubTabs.has('insecure') && (
         <div className={subTab === 'insecure' ? 'space-y-3' : 'hidden'}>
           {/* Header Hero Banner */}
-          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="font-mono text-[10px] font-semibold tracking-wider text-amber-600 uppercase dark:text-amber-400">
-                  {t('doctorTitle') || 'DOCTOR'} ·{' '}
-                  {t('insecureSubtitle') || 'Bookmarks saved over unencrypted HTTP'}
-                </div>
-                <div className="mt-0.5 flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   <ShieldAlert className="size-4 shrink-0 text-amber-500" />
                   <h3 className="text-foreground text-sm font-bold">
                     {t('insecureTitle') || 'Insecure HTTP Bookmarks'}
                   </h3>
-                  <span className="text-muted-foreground font-mono text-xs">
+                  <span className="text-muted-foreground text-xs font-medium">
                     {t('insecureFound', { count: insecureBookmarks.length }) ||
-                      `${insecureBookmarks.length} insecure links found`}
+                      `${insecureBookmarks.length} insecure links`}
                   </span>
                 </div>
+                <p className="text-muted-foreground mt-0.5 flex items-center gap-1 text-[11px]">
+                  <Info className="size-3 shrink-0 text-amber-500" />
+                  <span>
+                    {lang === 'tr'
+                      ? 'Şifresiz (http://) bağlantılar. Toplu yükseltme yalnızca HTTPS yanıtı doğrulanan sitelere uygulanır.'
+                      : 'Unencrypted (http://) links. Bulk upgrade only modifies sites verified to support HTTPS.'}
+                  </span>
+                </p>
               </div>
 
-              {/* Upgrade All Button */}
+              {/* Verify & Upgrade Buttons */}
               {insecureBookmarks.length > 0 && (
-                <Button
-                  size="sm"
-                  onClick={handleUpgradeAllHttps}
-                  disabled={isUpgradingHttps}
-                  className="h-7 cursor-pointer border border-amber-500/40 bg-amber-600 text-xs font-semibold text-white shadow-xs hover:bg-amber-700 active:scale-[0.97] dark:bg-amber-500 dark:hover:bg-amber-600"
-                >
-                  {isUpgradingHttps ? (
-                    <>
-                      <Loader2 className="mr-1 size-3 animate-spin" />
-                      <span>
-                        {upgradeHttpsProgress
-                          ? `${upgradeHttpsProgress.current}/${upgradeHttpsProgress.total}`
-                          : t('upgradingHttps') || 'Upgrading...'}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Lock className="mr-1 size-3" />
-                      <span>{t('upgradeAllHttpsBtn') || 'Upgrade All to HTTPS'}</span>
-                    </>
-                  )}
-                </Button>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleVerifyHttpsSupport}
+                    disabled={isVerifyingHttps || isUpgradingHttps}
+                    className="h-7 cursor-pointer border-amber-500/30 px-2.5 text-xs font-medium text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+                    title={
+                      lang === 'tr'
+                        ? 'Sitelerin HTTPS destekleyip desteklemediğini test et'
+                        : 'Test which sites support encrypted HTTPS'
+                    }
+                  >
+                    {isVerifyingHttps ? (
+                      <>
+                        <Loader2 className="mr-1 size-3 animate-spin" />
+                        <span>
+                          {verifyHttpsProgress
+                            ? `${verifyHttpsProgress.current}/${verifyHttpsProgress.total}`
+                            : lang === 'tr'
+                              ? 'Test ediliyor...'
+                              : 'Verifying...'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="mr-1 size-3" />
+                        <span>
+                          {httpsVerifyMap.size > 0
+                            ? lang === 'tr'
+                              ? `Yeniden Doğrula (${verifiedHttpItems.length} hazır)`
+                              : `Re-Verify (${verifiedHttpItems.length} ready)`
+                            : lang === 'tr'
+                              ? 'HTTPS Doğrula'
+                              : 'Verify HTTPS'}
+                        </span>
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    onClick={handleUpgradeAllHttps}
+                    disabled={
+                      isUpgradingHttps ||
+                      isVerifyingHttps ||
+                      (httpsVerifyMap.size > 0 && verifiedHttpItems.length === 0)
+                    }
+                    className="h-7 cursor-pointer border border-amber-500/40 bg-amber-600 text-xs font-semibold text-white shadow-xs hover:bg-amber-700 active:scale-[0.97] dark:bg-amber-500 dark:hover:bg-amber-600"
+                  >
+                    {isUpgradingHttps ? (
+                      <>
+                        <Loader2 className="mr-1 size-3 animate-spin" />
+                        <span>
+                          {upgradeHttpsProgress
+                            ? `${upgradeHttpsProgress.current}/${upgradeHttpsProgress.total}`
+                            : t('upgradingHttps') || 'Upgrading...'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="mr-1 size-3" />
+                        <span>
+                          {httpsVerifyMap.size > 0
+                            ? lang === 'tr'
+                              ? `Doğrulananları Yükselt (${verifiedHttpItems.length})`
+                              : `Upgrade Verified (${verifiedHttpItems.length})`
+                            : t('upgradeAllHttpsBtn') || 'Verify & Upgrade All'}
+                        </span>
+                      </>
+                    )}
+                  </Button>
+                </div>
               )}
             </div>
 
-            {/* Notice about ignored localhost and private IPs */}
-            <div className="text-muted-foreground/90 mt-3 flex items-center gap-1.5 border-t border-amber-500/15 pt-2.5 text-[10.5px]">
-              <span className="font-medium text-amber-700 dark:text-amber-300">
-                🔒{' '}
-                {t('localExcludedNotice') ||
-                  'Localhost, 127.0.0.1, and private LAN IP addresses are automatically excluded.'}
-              </span>
-            </div>
+            {/* Search / Filter input for long HTTP lists */}
+            {insecureBookmarks.length > 8 && (
+              <div className="relative mt-2.5">
+                <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-3 -translate-y-1/2" />
+                <Input
+                  value={httpSearchQuery}
+                  onChange={(e) => {
+                    setHttpSearchQuery(e.target.value);
+                    setVisibleHttpCount(30);
+                  }}
+                  placeholder={
+                    lang === 'tr'
+                      ? 'HTTP yer imlerinde ara (başlık, domain veya klasör)...'
+                      : 'Filter HTTP bookmarks by title, domain, or folder...'
+                  }
+                  className="bg-background/70 border-border/60 h-7 pr-7 pl-7 text-xs"
+                />
+                {httpSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setHttpSearchQuery('')}
+                    className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer p-0.5"
+                  >
+                    <X className="size-3" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* List of Insecure Bookmarks */}
@@ -1473,18 +1839,19 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
             </div>
           ) : (
             <div className="space-y-2">
-              {insecureBookmarks.map((item) => {
+              {visibleInsecureBookmarks.map((item) => {
                 const isUpgradingThis = upgradingSingleId === item.id;
                 const pathPart = item.url.slice(7);
+                const verifyStatus = httpsVerifyMap.get(item.id);
                 return (
                   <div
                     key={item.id}
-                    className="group border-border/50 bg-card hover:border-border rounded-lg border p-3 shadow-2xs transition-[border-color,background-color] duration-120"
+                    className="group border-border/50 bg-card hover:border-border rounded-lg border p-2.5 shadow-2xs transition-[border-color,background-color] duration-120"
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-2.5">
                       <div className="min-w-0 flex-1 space-y-1">
-                        {/* Title & Domain */}
-                        <div className="flex items-center gap-2">
+                        {/* Title & Domain & HTTPS Verification Badge */}
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <img
                             src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=32`}
                             alt=""
@@ -1496,44 +1863,60 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           <span className="text-foreground truncate text-xs font-semibold">
                             {item.title || item.domain}
                           </span>
+                          {verifyStatus === true && (
+                            <Badge
+                              variant="outline"
+                              className="h-4 shrink-0 border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[8.5px] font-medium text-emerald-600 dark:text-emerald-400"
+                            >
+                              {lang === 'tr' ? '✓ HTTPS çalışıyor' : '✓ HTTPS works'}
+                            </Badge>
+                          )}
+                          {verifyStatus === false && (
+                            <Badge
+                              variant="outline"
+                              className="text-muted-foreground border-border/60 h-4 shrink-0 px-1.5 py-0 text-[8.5px]"
+                            >
+                              {lang === 'tr' ? 'HTTPS yanıt vermedi' : 'HTTPS unavailable'}
+                            </Badge>
+                          )}
                           {item.path && (
                             <Badge
                               variant="outline"
                               className="text-muted-foreground border-border/50 h-4 max-w-[130px] shrink-0 truncate px-1.5 py-0 text-[9px]"
                               title={item.path}
                             >
-                              📁 {item.path}
+                              📁 {formatShortFolderPath(item.path, lang)}
                             </Badge>
                           )}
                         </div>
 
                         {/* URL comparison with protocol highlight */}
-                        <div className="bg-muted/25 border-border/30 flex items-center gap-1.5 rounded border p-1.5 font-mono text-[10.5px] leading-relaxed break-all">
+                        <div className="bg-muted/25 border-border/30 flex items-center gap-1.5 rounded border p-1.5 font-mono text-[10px] leading-relaxed break-all">
                           <span className="rounded-xs bg-amber-500/10 px-0.5 font-semibold text-amber-600 line-through dark:text-amber-400">
                             http://
                           </span>
                           <span className="text-muted-foreground truncate">{pathPart}</span>
-                          <span className="text-muted-foreground/60 shrink-0">→</span>
+                          <span className="text-muted-foreground/60 shrink-0 font-sans">→</span>
                           <span className="shrink-0 rounded-xs bg-emerald-500/10 px-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
                             https://
                           </span>
                         </div>
                       </div>
 
-                      {/* Actions */}
-                      <div className="flex shrink-0 items-center gap-1 pt-0.5">
+                      {/* Subtle Row Actions — Primary emphasis stays on top bulk button */}
+                      <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
                         <Button
-                          size="sm"
-                          variant="outline"
+                          size="xs"
+                          variant="ghost"
                           disabled={isUpgradingThis || isUpgradingHttps}
                           onClick={() => handleUpgradeSingleHttps(item)}
-                          className="h-7 cursor-pointer border-amber-500/30 px-2 text-xs text-amber-700 hover:bg-amber-500/10 active:scale-[0.97] dark:text-amber-300"
+                          className="border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50 h-6 cursor-pointer gap-1 rounded border px-1.5 text-[10px] font-medium active:scale-[0.97]"
                           title="Upgrade this bookmark to HTTPS"
                         >
                           {isUpgradingThis ? (
-                            <Loader2 className="mr-1 size-3 animate-spin" />
+                            <Loader2 className="size-2.5 animate-spin" />
                           ) : (
-                            <Lock className="mr-1 size-3" />
+                            <Lock className="size-2.5" />
                           )}
                           <span>{t('upgradeSingleBtn') || 'Upgrade'}</span>
                         </Button>
@@ -1552,7 +1935,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           type="button"
                           onClick={() => handleDismissInsecure(item.id)}
                           className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
-                          title="Dismiss (Keep as HTTP)"
+                          title={
+                            lang === 'tr'
+                              ? 'Yoksay (HTTP olarak bırak ve listeden gizle)'
+                              : 'Ignore (Keep as HTTP and hide from list)'
+                          }
+                          aria-label="Ignore HTTP warning"
                         >
                           <EyeOff className="size-3" />
                         </button>
@@ -1570,6 +1958,21 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   </div>
                 );
               })}
+
+              {visibleInsecureBookmarks.length < filteredInsecureBookmarks.length && (
+                <div className="pt-1 text-center">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => setVisibleHttpCount((prev) => prev + 40)}
+                    className="h-7 cursor-pointer px-3 text-xs"
+                  >
+                    {lang === 'tr'
+                      ? `Daha fazla göster (${filteredInsecureBookmarks.length - visibleInsecureBookmarks.length} kaldı)`
+                      : `Show more (${filteredInsecureBookmarks.length - visibleInsecureBookmarks.length} remaining)`}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1582,12 +1985,25 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           <div className="border-border/60 bg-muted/15 space-y-2.5 rounded-lg border p-3">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <h3 className="text-foreground text-xs font-semibold">
-                  {t('brokenLinkScannerTitle') || 'Link Health Checker'}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-foreground text-xs font-semibold">
+                    {t('brokenLinkScannerTitle') || 'Link Health Checker'}
+                  </h3>
+                  {lastScannedAt && (
+                    <span className="text-muted-foreground flex items-center gap-1 text-[10px]">
+                      <Clock className="size-2.5" />
+                      {lang === 'tr' ? 'Son tarama:' : 'Last scanned:'}{' '}
+                      {new Date(lastScannedAt).toLocaleTimeString(
+                        lang === 'tr' ? 'tr-TR' : 'en-US',
+                        { hour: '2-digit', minute: '2-digit' }
+                      )}
+                    </span>
+                  )}
+                </div>
                 <p className="text-muted-foreground mt-0.5 text-[10.5px]">
-                  {t('brokenLinkScannerDesc') ||
-                    'Tests your bookmarks via browser fetch for 404 Not Found & dead links.'}
+                  {lang === 'tr'
+                    ? 'Silinmiş (404/5xx) sayfaları tespit eder. CORS/bot korumalı siteler "Doğrulanamadı" olarak ayrılır.'
+                    : 'Detects dead (404/5xx) pages. CORS/bot-protected sites are separated as "Unverified".'}
                 </p>
               </div>
 
@@ -1604,7 +2020,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
               ) : (
                 <Button
                   size="sm"
-                  variant="default"
+                  variant={hasScannedBroken ? 'outline' : 'default'}
                   onClick={startScan}
                   className="h-7 cursor-pointer px-2.5 text-xs font-medium active:scale-[0.97]"
                 >
@@ -1623,7 +2039,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   <span className="max-w-[200px] truncate font-mono">
                     {scanProgress.currentUrl || 'Testing...'}
                   </span>
-                  <span className="font-mono">
+                  <span>
                     {scanProgress.current} / {scanProgress.total} (
                     {Math.round((scanProgress.current / (scanProgress.total || 1)) * 100)}%)
                   </span>
@@ -1643,8 +2059,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           {/* Results Banner & Filters */}
           {brokenLinks.length > 0 && (
             <div className="space-y-2">
-              <div className="space-y-2 rounded-xl border border-rose-500/25 bg-rose-500/10 p-3 shadow-2xs">
-                <div className="flex items-center justify-between gap-2">
+              <div className="space-y-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 shadow-2xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs">
                     <div className="flex items-center gap-1.5">
                       {isRemovingBroken ? (
@@ -1652,56 +2068,71 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                       ) : (
                         <AlertTriangle className="size-3.5 text-rose-600 dark:text-rose-400" />
                       )}
-                      <span className="font-semibold text-rose-700 dark:text-rose-300">
+                      <span className="font-semibold text-rose-800 dark:text-rose-200">
                         {isRemovingBroken
                           ? `Removing broken links (${removingBrokenProgress?.current || 0}/${
                               removingBrokenProgress?.total || 0
                             })...`
-                          : `${brokenLinks.length - dismissedBrokenIds.size} ${
-                              t('brokenLinksDetected') || 'broken link(s) found'
-                            }`}
+                          : lang === 'tr'
+                            ? `${confirmedBrokenLinks.length} doğrulanmış kırık link (${countUnverified} doğrulanamadı)`
+                            : `${confirmedBrokenLinks.length} confirmed broken (${countUnverified} unverified)`}
                       </span>
                     </div>
-                    <p className="mt-0.5 pl-5 text-[10px] text-rose-600/80 dark:text-rose-400/80">
-                      {isRemovingBroken
-                        ? 'Safely moving bookmarks to Recycle Bin...'
-                        : t('brokenLinksNotice') || 'Safely moved to Recycle Bin when removed.'}
+                    <p className="mt-0.5 pl-5 text-[10px] text-rose-700/85 dark:text-rose-300/85">
+                      {lang === 'tr'
+                        ? 'Doğrulanamayan (CORS/engel) siteler yanlış pozitifleri önlemek için toplu silmeye dahil edilmez.'
+                        : 'Unverified (CORS/blocked) sites are excluded from Remove All to prevent false positives.'}
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      size="xs"
-                      variant="destructive"
-                      disabled={isRemovingBroken || activeBrokenLinks.length === 0}
-                      onClick={() => handleRemoveBrokenBatch(brokenFilter !== 'all')}
-                      className="h-7 cursor-pointer gap-1 px-3 text-[11px] font-medium shadow-xs active:scale-[0.97]"
-                    >
-                      {isRemovingBroken ? (
+                  {confirmedBrokenLinks.length > 0 && brokenFilter !== 'unverified' && (
+                    <div className="flex items-center gap-1.5">
+                      {confirmRemoveBroken ? (
                         <>
-                          <Loader2 className="size-3 animate-spin" />
-                          <span>
-                            {removingBrokenProgress
-                              ? `${Math.round(
-                                  (removingBrokenProgress.current /
-                                    (removingBrokenProgress.total || 1)) *
-                                    100
-                                )}%`
-                              : 'Removing...'}
-                          </span>
+                          <Button
+                            size="xs"
+                            onClick={handleRemoveBrokenBatch}
+                            disabled={isRemovingBroken}
+                            className="h-7 cursor-pointer bg-rose-600 px-2.5 text-[11px] font-semibold text-white shadow-xs hover:bg-rose-700 active:scale-[0.97]"
+                          >
+                            {lang === 'tr'
+                              ? `Onayla (${
+                                  brokenFilter === 'all'
+                                    ? confirmedBrokenLinks.length
+                                    : activeBrokenLinks.length
+                                } sil)`
+                              : `Confirm (${
+                                  brokenFilter === 'all'
+                                    ? confirmedBrokenLinks.length
+                                    : activeBrokenLinks.length
+                                })`}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => setConfirmRemoveBroken(false)}
+                            className="h-7 px-2 text-[11px]"
+                          >
+                            {t('cancelBtn') || 'Cancel'}
+                          </Button>
                         </>
                       ) : (
-                        <>
+                        <Button
+                          size="xs"
+                          disabled={isRemovingBroken}
+                          onClick={() => setConfirmRemoveBroken(true)}
+                          className="h-7 cursor-pointer gap-1 bg-rose-600 px-3 text-[11px] font-semibold text-white shadow-xs hover:bg-rose-700 active:scale-[0.97] dark:bg-rose-600 dark:hover:bg-rose-500"
+                        >
                           <Trash2 className="size-3" />
                           <span>
                             {brokenFilter !== 'all'
                               ? `Remove ${activeBrokenLinks.length} Filtered`
-                              : `Remove All (${brokenLinks.length - dismissedBrokenIds.size})`}
+                              : `Remove All (${confirmedBrokenLinks.length})`}
                           </span>
-                        </>
+                        </Button>
                       )}
-                    </Button>
-                  </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Real-time Animated Deletion Progress Bar */}
@@ -1720,8 +2151,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 )}
               </div>
 
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1 text-[10.5px]">
+              {/* Filter Pills — Unified "Unverified" / "Doğrulanamadı" label */}
+              <div className="flex flex-wrap items-center gap-1 text-[10.5px]">
                 <button
                   type="button"
                   onClick={() => setBrokenFilter('all')}
@@ -1759,17 +2190,22 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                     5xx Error ({count5xx})
                   </button>
                 )}
-                {countTimeout > 0 && (
+                {countUnverified > 0 && (
                   <button
                     type="button"
-                    onClick={() => setBrokenFilter('timeout')}
+                    onClick={() => setBrokenFilter('unverified')}
                     className={`cursor-pointer rounded-md px-2 py-0.5 font-medium transition-colors ${
-                      brokenFilter === 'timeout'
+                      brokenFilter === 'unverified'
                         ? 'border border-amber-500/30 bg-amber-500/15 font-semibold text-amber-700 dark:text-amber-300'
                         : 'text-muted-foreground hover:text-foreground'
                     }`}
+                    title={
+                      lang === 'tr'
+                        ? 'Tarayıcı CORS/bot engeli veya zaman aşımı nedeniyle doğrulanamayan siteler'
+                        : 'Sites that could not be verified due to browser CORS/bot protection or timeout'
+                    }
                   >
-                    Timeout / Dead ({countTimeout})
+                    {lang === 'tr' ? 'Doğrulanamadı' : 'Unverified'} ({countUnverified})
                   </button>
                 )}
               </div>
@@ -1804,9 +2240,10 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
               {activeBrokenLinks.map((item) => {
                 const displayTitle =
                   item.bookmark.title?.trim() || item.bookmark.domain || item.bookmark.url;
-                const is404 = item.statusCode === 404;
+                const is404 = item.statusCode === 404 || item.statusCode === 410;
                 const is5xx = Boolean(item.statusCode && item.statusCode >= 500);
                 const isDeletingThis = deletingBrokenId === item.bookmark.id;
+                const unifiedUnverifiedLabel = lang === 'tr' ? 'Doğrulanamadı' : 'Unverified';
 
                 return (
                   <div
@@ -1841,7 +2278,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           </a>
                           <Badge
                             variant="outline"
-                            className={`h-4 shrink-0 px-1.5 py-0 font-mono text-[8.5px] font-medium ${
+                            className={`h-4 shrink-0 px-1.5 py-0 text-[8.5px] font-medium ${
                               is404
                                 ? 'border-rose-400/40 bg-rose-500/10 text-rose-600 dark:text-rose-400'
                                 : is5xx
@@ -1849,25 +2286,30 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                                   : 'border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
                             }`}
                             title={
-                              item.error ||
-                              (is404
-                                ? 'HTTP 404 Not Found'
+                              is404
+                                ? `HTTP ${item.statusCode} Not Found`
                                 : is5xx
                                   ? `HTTP ${item.statusCode} Server Error`
-                                  : 'Connection Timeout')
+                                  : lang === 'tr'
+                                    ? 'CORS / Bot koruması veya zaman aşımı nedeniyle doğrulanamadı (muhtemelen çalışıyor)'
+                                    : 'Could not verify due to CORS / bot protection or timeout (likely alive)'
                             }
                           >
-                            {is404 ? 'HTTP 404' : is5xx ? `HTTP ${item.statusCode}` : 'Unreachable'}
+                            {is404
+                              ? `HTTP ${item.statusCode}`
+                              : is5xx
+                                ? `HTTP ${item.statusCode}`
+                                : unifiedUnverifiedLabel}
                           </Badge>
                         </div>
 
-                        {/* Clean Subtitle without redundant red error strings */}
+                        {/* Clean Subtitle with truncated folder path */}
                         <div className="text-muted-foreground flex items-center gap-1.5 text-[10px]">
                           <span
-                            className="text-muted-foreground/80 max-w-[170px] truncate"
+                            className="text-muted-foreground/80 max-w-[160px] truncate"
                             title={item.bookmark.path}
                           >
-                            📁 {item.bookmark.path}
+                            📁 {formatShortFolderPath(item.bookmark.path, lang)}
                           </span>
                           {displayTitle !== item.bookmark.domain && (
                             <>
@@ -1897,7 +2339,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                         type="button"
                         onClick={() => handleDismissBroken(item.bookmark.id)}
                         className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
-                        title="Keep bookmark (Dismiss from broken list)"
+                        title={
+                          lang === 'tr'
+                            ? 'Yoksay (Yer imini koru ve listeden gizle)'
+                            : 'Ignore (Keep bookmark and hide from list)'
+                        }
+                        aria-label="Ignore broken link warning"
                       >
                         <EyeOff className="size-3" />
                       </button>
@@ -1928,7 +2375,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       {visitedSubTabs.has('empty') && (
         <div className={subTab === 'empty' ? 'space-y-3' : 'hidden'}>
           {emptyFolders.length > 0 && (
-            <div className="flex items-center justify-between rounded-lg border border-blue-500/20 bg-blue-500/10 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-500/20 bg-blue-500/10 p-3">
               <div className="text-xs">
                 <span className="font-semibold text-blue-700 dark:text-blue-300">
                   {emptyFolders.length} {t('emptyFoldersDetected') || 'empty folder(s) found'}
@@ -1939,15 +2386,38 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </p>
               </div>
 
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleCleanAllEmptyFolders}
-                className="h-7 border-blue-500/40 text-xs font-medium text-blue-700 hover:bg-blue-500/20 active:scale-[0.97] dark:text-blue-300"
-              >
-                <Trash2 className="mr-1 size-3" />
-                {t('cleanAllEmptyFoldersBtn') || 'Clean All Empty'}
-              </Button>
+              {confirmCleanEmpty ? (
+                <div className="animate-in fade-in flex items-center gap-1.5 duration-150">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleCleanAllEmptyFolders}
+                    className="h-7 px-2.5 text-xs font-medium active:scale-[0.97]"
+                  >
+                    {lang === 'tr'
+                      ? `Onayla (${emptyFolders.length} sil)`
+                      : `Confirm (${emptyFolders.length})`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmCleanEmpty(false)}
+                    className="h-7 px-2 text-xs"
+                  >
+                    {t('cancelBtn') || 'Cancel'}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setConfirmCleanEmpty(true)}
+                  className="h-7 border-blue-500/40 text-xs font-medium text-blue-700 hover:bg-blue-500/20 active:scale-[0.97] dark:text-blue-300"
+                >
+                  <Trash2 className="mr-1 size-3" />
+                  {t('cleanAllEmptyFoldersBtn') || 'Clean All Empty'}
+                </Button>
+              )}
             </div>
           )}
 
@@ -1978,11 +2448,17 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   <div className="flex min-w-0 flex-1 items-center gap-2.5">
                     <Folder className="size-4 shrink-0 text-blue-500" />
                     <div className="min-w-0 flex-1">
-                      <span className="text-foreground block truncate text-xs font-medium">
-                        {folder.title}
+                      <span
+                        className="text-foreground block truncate text-xs font-medium"
+                        title={folder.path}
+                      >
+                        {formatFolderTitle(folder.title, folder.path, lang)}
                       </span>
-                      <span className="text-muted-foreground mt-0.5 block truncate text-[10px]">
-                        📁 {folder.path}
+                      <span
+                        className="text-muted-foreground mt-0.5 block truncate text-[10px]"
+                        title={folder.path}
+                      >
+                        📁 {formatShortFolderPath(folder.path, lang)}
                       </span>
                     </div>
                   </div>

@@ -8,12 +8,18 @@ import {
   Edit2,
   AtSign,
   Sparkles,
+  RotateCcw,
+  History,
+  Folder,
+  Bookmark,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/lib/i18n';
+import { formatFolderTitle } from '@/lib/utils';
 import { generatePlanViaBackground, shouldUseAgentHarness } from '@/services/aiClient';
 import {
   getBookmarkTree,
@@ -21,9 +27,17 @@ import {
   flattenBookmarks,
   getAllFolders,
   executePlan,
+  restoreSnapshot,
 } from '@/services/bookmarks';
-import { getSettings, hasConfiguredKey } from '@/services/storage';
-import type { AgentProgress, FlatBookmark, FlatFolder, ReorgAction, ReorgPlan } from '@/types';
+import { getSettings, hasConfiguredKey, getSnapshots, popLatestSnapshot } from '@/services/storage';
+import type {
+  AgentProgress,
+  FlatBookmark,
+  FlatFolder,
+  ReorgAction,
+  ReorgPlan,
+  TreeSnapshot,
+} from '@/types';
 
 import { DiffPreview } from './DiffPreview';
 import { MentionMenu, type MentionItem } from './MentionMenu';
@@ -60,6 +74,8 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [availableFolders, setAvailableFolders] = useState<FlatFolder[]>([]);
   const [availableBookmarks, setAvailableBookmarks] = useState<FlatBookmark[]>([]);
+  const [recentSnapshots, setRecentSnapshots] = useState<TreeSnapshot[]>([]);
+  const [isUndoing, setIsUndoing] = useState(false);
   const [isMentionOpen, setIsMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
@@ -67,13 +83,36 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   // Load user's folders and bookmarks for @ mentions
   const loadMentionTargets = async () => {
     try {
-      const tree = await getBookmarkTree();
+      const [tree, snaps] = await Promise.all([getBookmarkTree(), getSnapshots()]);
       setAvailableFolders(getAllFolders(tree).filter((f) => f.id !== '0'));
       setAvailableBookmarks(
         flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'))
       );
+      setRecentSnapshots(snaps);
     } catch (err) {
       console.warn('Could not load mention targets:', err);
+    }
+  };
+
+  const handleUndoLatestSnapshot = async () => {
+    if (isUndoing) return;
+    setIsUndoing(true);
+    try {
+      const snap = await popLatestSnapshot();
+      if (snap) {
+        await restoreSnapshot(snap);
+        await loadMentionTargets();
+        onPlanApplied();
+        setAppliedSuccess(null);
+        toast.success(
+          t('undoSuccess') ||
+            (lang === 'tr' ? 'Değişiklikler geri alındı!' : 'Changes reverted successfully!')
+        );
+      }
+    } catch (err) {
+      console.error('Failed to undo snapshot:', err);
+    } finally {
+      setIsUndoing(false);
     }
   };
 
@@ -289,6 +328,12 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       setPromptText('');
       await loadMentionTargets(); // Refresh folders for future mentions
       onPlanApplied();
+      toast.success(t('actionsAppliedSuccess', { count: result.appliedCount }), {
+        action: {
+          label: t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo'),
+          onClick: () => handleUndoLatestSnapshot(),
+        },
+      });
     } catch (err: any) {
       console.error('Plan execution failed:', err);
       setError('An error occurred while executing plan actions.');
@@ -434,100 +479,10 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
 
       {/* Prompt Input Form */}
       {!currentPlan && (
-        <div className="space-y-2">
-          <div className="space-y-1">
-            <div className="text-muted-foreground/90 flex items-center justify-between text-[10.5px]">
-              <span className="text-foreground/80 font-medium">{t('requestLabel')}</span>
-              <span className="font-mono text-[9.5px] opacity-75">{t('languageHint')}</span>
-            </div>
-
-            {/* Relative container for Textarea + @ Mention Popup */}
-            <div className="group relative">
-              {/* @ Mention Autocomplete Menu */}
-              {isMentionOpen && (
-                <MentionMenu
-                  items={filteredMentions}
-                  selectedIndex={mentionSelectedIndex}
-                  onSelect={handleSelectMention}
-                  onClose={() => setIsMentionOpen(false)}
-                />
-              )}
-
-              <Textarea
-                ref={textareaRef}
-                value={promptText}
-                onChange={handleTextChange}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  lang === 'tr'
-                    ? "Örn: @IPA klasörüne dokunma, @needfix içindekileri dağıt, @antfu/taze'yi @Development'a taşı..."
-                    : 'e.g. Do not touch @"needfix", merge @"other" into @"Development", move @"antfu/taze"...'
-                }
-                className="border-border/80 focus-visible:border-ring min-h-[90px] resize-none pr-16 pb-7 text-xs transition-shadow duration-150 focus-visible:ring-1"
-                disabled={isLoading}
-              />
-
-              {/* Bottom Right Actions inside Textarea */}
-              <div className="absolute right-2 bottom-2 flex items-center gap-1">
-                {/* Clickable @ Mention pill */}
-                <button
-                  type="button"
-                  onClick={handleTriggerMentionClick}
-                  title="Mention target folder or bookmark (@)"
-                  className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-0.5 rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors active:scale-95"
-                >
-                  <AtSign className="text-primary size-2.5" />
-                  <span>Target</span>
-                </button>
-
-                <span className="text-muted-foreground/60 hidden items-center gap-0.5 font-mono text-[9px] select-none group-focus-within:inline-flex">
-                  ⌘<CornerDownLeft className="size-2.5" />
-                </span>
-
-                <Button
-                  size="sm"
-                  variant="default"
-                  disabled={isLoading || !promptText.trim()}
-                  onClick={() => handleGeneratePlan(promptText)}
-                  className="bg-primary text-primary-foreground size-6 cursor-pointer p-0 transition-transform duration-120 active:scale-95"
-                  title={t('generatePlanTooltip')}
-                >
-                  {isLoading ? (
-                    <Loader2 className="size-3 animate-spin duration-500" />
-                  ) : (
-                    <Send className="size-2.5" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            {/* Helpful Mention Tip */}
-            <p className="text-muted-foreground/75 flex items-center gap-1 px-1 text-[10px]">
-              <span>💡</span>
-              <span>
-                {lang === 'tr'
-                  ? 'İpucu: Klasör veya yer imi hedeflemek için @ yazın (Örn: @"IPA" dokunma)'
-                  : 'Tip: Type @ to mention a folder or bookmark (e.g. do not touch @"needfix")'}
-              </span>
-            </p>
-
-            {/* Architecture Methodologies (PARA, Johnny.Decimal, Hot-Warm-Cold, etc.) */}
-            <div className="pt-1">
-              <MethodologySelector
-                lang={lang}
-                activeMethodologyId={activeMethodologyId}
-                onSelectMethodology={(preset) => {
-                  setActiveMethodologyId(preset.id);
-                  setPromptText(lang === 'tr' ? preset.prompt.tr : preset.prompt.en);
-                  if (textareaRef.current) {
-                    textareaRef.current.focus();
-                  }
-                }}
-              />
-            </div>
-
-            {/* Quick Prompt Recipe Chips */}
-            <div className="space-y-1.5 pt-2">
+        <div className="flex flex-1 flex-col justify-between space-y-3">
+          <div className="space-y-2.5">
+            {/* Quick Prompt Recipe Chips — Placed above input for immediate 1-click access */}
+            <div className="space-y-1.5">
               <span className="text-muted-foreground/80 block px-1 text-[9.5px] font-semibold tracking-wider uppercase">
                 {lang === 'tr' ? 'Hızlı Komut Reçeteleri' : 'Quick Recipes'}
               </span>
@@ -624,6 +579,187 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-muted-foreground/90 flex items-center justify-between text-[10.5px]">
+                <span className="text-foreground/80 font-medium">{t('requestLabel')}</span>
+                <span className="text-[9.5px] opacity-75">{t('languageHint')}</span>
+              </div>
+
+              {/* Relative container for Textarea + @ Mention Popup */}
+              <div className="group relative">
+                {/* @ Mention Autocomplete Menu */}
+                {isMentionOpen && (
+                  <MentionMenu
+                    items={filteredMentions}
+                    selectedIndex={mentionSelectedIndex}
+                    onSelect={handleSelectMention}
+                    onClose={() => setIsMentionOpen(false)}
+                  />
+                )}
+
+                <Textarea
+                  ref={textareaRef}
+                  value={promptText}
+                  onChange={handleTextChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
+                    lang === 'tr'
+                      ? "Örn: @IPA klasörüne dokunma, @needfix içindekileri dağıt, @antfu/taze'yi @Development'a taşı..."
+                      : 'e.g. Do not touch @"needfix", merge @"other" into @"Development", move @"antfu/taze"...'
+                  }
+                  className="border-border/80 focus-visible:border-ring min-h-[90px] resize-none pr-16 pb-7 text-xs transition-shadow duration-150 focus-visible:ring-1"
+                  disabled={isLoading}
+                />
+
+                {/* Bottom Right Actions inside Textarea */}
+                <div className="absolute right-2 bottom-2 flex items-center gap-1">
+                  {/* Clickable @ Mention pill */}
+                  <button
+                    type="button"
+                    onClick={handleTriggerMentionClick}
+                    title="Mention target folder or bookmark (@)"
+                    className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
+                  >
+                    <AtSign className="text-primary size-2.5" />
+                    <span>Target</span>
+                  </button>
+
+                  <span className="text-muted-foreground/60 hidden items-center gap-0.5 text-[9px] select-none group-focus-within:inline-flex">
+                    ⌘<CornerDownLeft className="size-2.5" />
+                  </span>
+
+                  <Button
+                    size="sm"
+                    variant="default"
+                    disabled={isLoading || !promptText.trim()}
+                    onClick={() => handleGeneratePlan(promptText)}
+                    className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-foreground/70 disabled:border-border/80 size-6.5 cursor-pointer border border-transparent p-0 transition-all duration-120 active:scale-95 disabled:opacity-85"
+                    title={t('generatePlanTooltip')}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="size-3 animate-spin duration-500" />
+                    ) : (
+                      <Send className="size-3" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Helpful Mention Tip */}
+              <p className="text-muted-foreground/75 flex items-center gap-1 px-1 text-[10px]">
+                <span>💡</span>
+                <span>
+                  {lang === 'tr'
+                    ? 'İpucu: Klasör veya yer imi hedeflemek için @ yazın (Örn: @"IPA" dokunma)'
+                    : 'Tip: Type @ to mention a folder or bookmark (e.g. do not touch @"needfix")'}
+                </span>
+              </p>
+            </div>
+
+            {/* Architecture Methodologies (PARA, Johnny.Decimal, Hot-Warm-Cold, etc.) */}
+            <MethodologySelector
+              lang={lang}
+              activeMethodologyId={activeMethodologyId}
+              onSelectMethodology={(preset) => {
+                setActiveMethodologyId(preset.id);
+                setPromptText(lang === 'tr' ? preset.prompt.tr : preset.prompt.en);
+                if (textareaRef.current) {
+                  textareaRef.current.focus();
+                }
+              }}
+            />
+
+            {/* Bottom Section: Recent Operations & Library Structure Preview */}
+            <div className="border-border/60 bg-muted/15 space-y-2 rounded-lg border p-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="text-foreground/90 flex items-center gap-1.5 text-[11px] font-semibold">
+                  <History className="text-primary size-3.5" />
+                  <span>
+                    {recentSnapshots.length > 0
+                      ? lang === 'tr'
+                        ? 'Son İşlemler & Yedekler'
+                        : 'Recent Operations & Backups'
+                      : lang === 'tr'
+                        ? 'Kütüphane Özeti & Klasörler'
+                        : 'Library Overview & Folders'}
+                  </span>
+                </div>
+                <div className="text-muted-foreground flex items-center gap-2 text-[10px]">
+                  <span className="flex items-center gap-1">
+                    <Bookmark className="size-2.5 text-amber-500" />
+                    {availableBookmarks.length}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Folder className="size-2.5 text-sky-500" />
+                    {availableFolders.length}
+                  </span>
+                </div>
+              </div>
+
+              {recentSnapshots.length > 0 ? (
+                <div className="divide-border/40 divide-y">
+                  {recentSnapshots.slice(0, 3).map((snap, idx) => (
+                    <div
+                      key={snap.id}
+                      className="flex items-center justify-between gap-2 py-1.5 text-[10.5px]"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-foreground truncate font-medium">{snap.description}</p>
+                        <span className="text-muted-foreground text-[9.5px]">
+                          {new Date(snap.timestamp).toLocaleTimeString(
+                            lang === 'tr' ? 'tr-TR' : 'en-US',
+                            { hour: '2-digit', minute: '2-digit' }
+                          )}
+                        </span>
+                      </div>
+                      {idx === 0 && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={isUndoing}
+                          onClick={handleUndoLatestSnapshot}
+                          className="h-6 shrink-0 cursor-pointer gap-1 px-2 text-[10px]"
+                        >
+                          <RotateCcw className={`size-2.5 ${isUndoing ? 'animate-spin' : ''}`} />
+                          <span>{t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo')}</span>
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1 pt-0.5">
+                  {availableFolders
+                    .filter((f) => f.id !== '1' && f.id !== '2')
+                    .slice(0, 8)
+                    .map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => {
+                          const mentionText = `@"${folder.title}" `;
+                          setPromptText((prev) =>
+                            prev ? `${prev.trim()} ${mentionText}` : mentionText
+                          );
+                          textareaRef.current?.focus();
+                        }}
+                        title={
+                          lang === 'tr'
+                            ? `İsteme @"${folder.title}" eklemek için tıklayın (${folder.path})`
+                            : `Click to mention @"${folder.title}" (${folder.path})`
+                        }
+                        className="border-border/50 bg-background/70 hover:bg-muted text-muted-foreground hover:text-foreground flex max-w-[145px] cursor-pointer items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[10px] transition-colors"
+                      >
+                        <Folder className="size-2.5 shrink-0 text-amber-500" />
+                        <span className="truncate">
+                          {formatFolderTitle(folder.title, folder.path, lang)}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

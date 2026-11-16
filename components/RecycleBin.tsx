@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
+import { formatFolderTitle, formatShortFolderPath } from '@/lib/utils';
 import {
   getTrashItems,
   restoreFromTrash,
@@ -20,7 +21,7 @@ interface RecycleBinProps {
 export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function RecycleBin({
   onRestored,
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [items, setItems] = useState<TrashItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -83,7 +84,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col space-y-4 p-4">
+    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
       {/* Header Info */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
         <div>
@@ -197,8 +198,13 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-foreground max-w-[280px] truncate text-xs font-medium">
-                        {item.title}
+                      <span
+                        className="text-foreground max-w-[280px] truncate text-xs font-medium"
+                        title={item.title}
+                      >
+                        {isFolder
+                          ? formatFolderTitle(item.title, item.parentPath, lang)
+                          : item.title}
                       </span>
                       {isFolder && (
                         <Badge
@@ -211,8 +217,11 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
                     </div>
 
                     <div className="text-muted-foreground mt-1 flex items-center gap-2 text-[11px]">
-                      <span className="text-muted-foreground/80 max-w-[160px] truncate">
-                        📁 {item.parentPath || 'Bookmarks Bar'}
+                      <span
+                        className="text-muted-foreground/80 max-w-[160px] truncate"
+                        title={item.parentPath || 'Bookmarks Bar'}
+                      >
+                        📁 {formatShortFolderPath(item.parentPath || 'Bookmarks Bar', lang)}
                       </span>
                       <span>•</span>
                       <span className="flex shrink-0 items-center gap-0.5">

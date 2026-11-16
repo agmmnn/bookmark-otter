@@ -314,84 +314,90 @@ export const App: React.FC = () => {
     <div className="bg-background text-foreground selection:bg-primary/20 flex min-h-screen flex-col antialiased">
       <Header onOpenSettings={handleOpenSettings} />
 
-      {/* Navigation Tabs - 6 Balanced Compact Modules */}
-      <nav className="border-border/50 bg-muted/20 flex items-center gap-0.5 border-b px-1.5 py-1 select-none">
+      {/* Navigation Tabs - Active tab shows label, inactive tabs show icon + tooltip */}
+      <nav className="border-border/50 bg-muted/20 flex items-center gap-1 border-b px-2 py-1 select-none">
         {/* 1. Recent */}
         <button
           onClick={() => handleTabChange('recent')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          title={t('tabRecent') || 'Recent'}
+          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'recent'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <Clock className="size-3 shrink-0" />
-          <span>{t('tabRecent')}</span>
+          <Clock className="size-3.5 shrink-0" />
+          {activeTab === 'recent' && <span>{t('tabRecent')}</span>}
         </button>
 
         {/* 2. Explorer */}
         <button
           onClick={() => handleTabChange('explorer')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          title={t('tabExplorer') || 'Explorer'}
+          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'explorer'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <FolderTree className="size-3 shrink-0 text-amber-500" />
-          <span>{t('tabExplorer') || 'Explorer'}</span>
+          <FolderTree className="size-3.5 shrink-0 text-amber-500" />
+          {activeTab === 'explorer' && <span>{t('tabExplorer') || 'Explorer'}</span>}
         </button>
 
         {/* 3. Copilot */}
         <button
           onClick={() => handleTabChange('copilot')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          title={t('tabCopilot') || 'Copilot'}
+          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'copilot'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <Wand2 className="text-primary size-3 shrink-0" />
-          <span>{t('tabCopilot')}</span>
+          <Wand2 className="text-primary size-3.5 shrink-0" />
+          {activeTab === 'copilot' && <span>{t('tabCopilot')}</span>}
         </button>
 
         {/* 4. Doctor */}
         <button
           onClick={() => handleTabChange('doctor')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          title={t('tabDoctor') || 'Doctor'}
+          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'doctor'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <Stethoscope className="size-3 shrink-0 text-emerald-500" />
-          <span>{t('tabDoctor') || 'Doctor'}</span>
+          <Stethoscope className="size-3.5 shrink-0 text-emerald-500" />
+          {activeTab === 'doctor' && <span>{t('tabDoctor') || 'Doctor'}</span>}
         </button>
 
         {/* 5. Insights */}
         <button
           onClick={() => handleTabChange('insights')}
-          className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          title={t('tabInsights') || 'Insights'}
+          className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'insights'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <Activity className="size-3 shrink-0 text-blue-500" />
-          <span>{t('tabInsights') || 'Insights'}</span>
+          <Activity className="size-3.5 shrink-0 text-blue-500" />
+          {activeTab === 'insights' && <span>{t('tabInsights') || 'Insights'}</span>}
         </button>
 
         {/* 6. Trash */}
         <button
           onClick={() => handleTabChange('trash')}
-          className={`relative flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-md px-0.5 py-1 text-[11px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          title={t('tabTrash') || 'Trash'}
+          className={`relative flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
             activeTab === 'trash'
-              ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+              ? 'bg-card text-foreground border-border/70 flex-[1.6] border px-2.5 font-semibold shadow-2xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
         >
-          <Trash2 className="size-3 shrink-0 text-rose-500" />
-          <span>{t('tabTrash') || 'Trash'}</span>
+          <Trash2 className="size-3.5 shrink-0 text-rose-500" />
+          {activeTab === 'trash' && <span>{t('tabTrash') || 'Trash'}</span>}
           {trashCount > 0 && <span className="size-1.5 shrink-0 rounded-full bg-rose-500" />}
         </button>
       </nav>

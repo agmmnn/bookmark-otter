@@ -2,9 +2,7 @@ import { cn } from 'cn';
 import { Settings, Sun, Moon } from 'lucide-react';
 import React from 'react';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 
@@ -25,52 +23,42 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
           alt="Bookmark Otter"
           className="size-6 rounded-md object-contain transition-transform duration-150 select-none active:scale-90"
         />
-        <div className="flex items-center gap-1.5">
-          <h1 className="text-foreground text-[12.5px] font-semibold tracking-tight">
-            {t('appTitle')}
-          </h1>
-          <Badge
-            variant="secondary"
-            className="bg-primary/10 text-primary border-primary/20 h-3.5 px-1 py-0 text-[9px] font-medium tracking-wide"
-          >
-            {t('copilotBadge')}
-          </Badge>
-        </div>
+        <h1 className="text-foreground text-[12.5px] font-semibold tracking-tight">
+          {t('appTitle')}
+        </h1>
       </div>
 
       {/* Header Actions */}
-      <div className="flex items-center gap-1">
-        {/* Dark / Light Mode Switch (Contextual icon morph & smooth toggle) */}
-        <div
+      <div className="flex items-center gap-1.5">
+        {/* Sun / Moon Icon Pair Toggle */}
+        <button
+          type="button"
           onClick={toggleTheme}
           title={isDark ? t('switchToLight') : t('switchToDark')}
-          className="group hover:bg-muted/50 flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-[background-color,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] select-none active:scale-[0.97]"
+          aria-label="Toggle theme"
+          className="border-border/60 bg-muted/40 hover:bg-muted/70 flex h-6 cursor-pointer items-center gap-0.5 rounded-full border p-0.5 transition-colors select-none active:scale-[0.97]"
         >
-          <div className="relative flex size-3 items-center justify-center">
-            <Sun
-              className={cn(
-                'absolute size-3 transition-[opacity,filter,transform,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]',
-                !isDark
-                  ? 'scale-100 opacity-100 blur-0 text-amber-500'
-                  : 'scale-[0.25] opacity-0 blur-[2px] text-muted-foreground/40 pointer-events-none'
-              )}
-            />
-            <Moon
-              className={cn(
-                'absolute size-3 transition-[opacity,filter,transform,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]',
-                isDark
-                  ? 'scale-100 opacity-100 blur-0 text-sky-400'
-                  : 'scale-[0.25] opacity-0 blur-[2px] text-muted-foreground/40 pointer-events-none'
-              )}
-            />
-          </div>
-          <Switch
-            size="sm"
-            checked={isDark}
-            aria-label="Toggle dark mode"
-            className="pointer-events-none cursor-pointer"
-          />
-        </div>
+          <span
+            className={cn(
+              'flex size-5 items-center justify-center rounded-full transition-all duration-150',
+              !isDark
+                ? 'bg-card text-amber-500 shadow-2xs'
+                : 'text-muted-foreground/60 hover:text-muted-foreground'
+            )}
+          >
+            <Sun className="size-3" />
+          </span>
+          <span
+            className={cn(
+              'flex size-5 items-center justify-center rounded-full transition-all duration-150',
+              isDark
+                ? 'bg-card text-sky-400 shadow-2xs'
+                : 'text-muted-foreground/60 hover:text-muted-foreground'
+            )}
+          >
+            <Moon className="size-3" />
+          </span>
+        </button>
 
         {/* Settings Button */}
         <Button

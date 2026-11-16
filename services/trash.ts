@@ -159,6 +159,21 @@ export async function restoreFromTrash(trashId: string): Promise<boolean> {
 }
 
 /**
+ * Restore the N most recently trashed items (for 1-click Undo toast on batch/single deletes)
+ */
+export async function restoreRecentTrashItems(count: number): Promise<number> {
+  if (count <= 0) return 0;
+  const items = await getTrashItems();
+  const toRestore = items.slice(0, count);
+  let restored = 0;
+  for (const item of toRestore) {
+    const ok = await restoreFromTrash(item.id);
+    if (ok) restored++;
+  }
+  return restored;
+}
+
+/**
  * Permanently delete a single item from the recycle bin
  */
 export async function permanentlyDelete(trashId: string): Promise<void> {

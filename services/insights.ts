@@ -126,9 +126,17 @@ export function calculateInsights(tree: BookmarkTreeNode[], knownBrokenCount = 0
 
   for (const b of bookmarks) {
     if (b.dateAdded && b.dateAdded > 0) {
-      if (!oldestBookmark || (oldestBookmark.dateAdded && b.dateAdded < oldestBookmark.dateAdded)) {
+      const hasRealTitle = Boolean(
+        b.title &&
+        b.title.trim().length > 0 &&
+        b.title.trim().toLowerCase() !== b.domain.toLowerCase()
+      );
+      if (
+        hasRealTitle &&
+        (!oldestBookmark || (oldestBookmark.dateAdded && b.dateAdded < oldestBookmark.dateAdded))
+      ) {
         oldestBookmark = {
-          title: b.title || b.domain || b.url,
+          title: b.title.trim(),
           url: b.url,
           dateAdded: b.dateAdded,
           domain: b.domain,

@@ -18,13 +18,16 @@ import {
   ChevronsDownUp,
 } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useDeferredValue } from 'react';
+import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
+import { formatFolderTitle } from '@/lib/utils';
 import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import { removeBookmarkWithTrash } from '@/services/cleaner';
+import { restoreRecentTrashItems } from '@/services/trash';
 import type { FlatBookmark, BookmarkTreeNode } from '@/types';
 
 type ViewMode = 'tree' | 'table';
@@ -48,6 +51,9 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
   useEffect(() => {
     if (initialSearchQuery) {
       setSearchQuery(initialSearchQuery);
+      if (initialSearchQuery === 'is:loose' || initialSearchQuery === 'is:single-domain') {
+        setViewMode('table');
+      }
     }
   }, [initialSearchQuery]);
   const [treeData, setTreeData] = useState<BookmarkTreeNode[]>([]);
@@ -127,12 +133,26 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
     setFlatBookmarks((prev) => prev.filter((b) => b.id !== bookmark.id));
     await loadBookmarks();
     if (onBookmarkChanged) onBookmarkChanged();
+    toast.success(
+      t('brokenLinkRemoved') ||
+        (lang === 'tr' ? 'Yer imi Çöp Kutusuna taşındı' : 'Moved bookmark to Recycle Bin'),
+      {
+        action: {
+          label: t('undoBtn') || (lang === 'tr' ? 'Geri Al' : 'Undo'),
+          onClick: async () => {
+            await restoreRecentTrashItems(1);
+            await loadBookmarks();
+            onBookmarkChanged?.();
+          },
+        },
+      }
+    );
   };
 
   // Pre-index matching node IDs so renderTreeNode performs O(1) set lookups instead of exponential recursion
   const matchingTreeIds = useMemo(() => {
     const q = deferredSearchQuery.toLowerCase().trim();
-    if (!q) return null;
+    if (!q || q === 'is:loose' || q === 'is:single-domain') return null;
     const matchSet = new Set<string>();
 
     function scan(nodes: BookmarkTreeNode[]): boolean {
@@ -164,7 +184,23 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
   const filteredBookmarks = useMemo(() => {
     let result = flatBookmarks;
     const q = deferredSearchQuery.toLowerCase().trim();
-    if (q) {
+    if (q === 'is:loose') {
+      result = result.filter(
+        (b) =>
+          b.parentId === '1' ||
+          b.parentId === '2' ||
+          b.path === 'Bookmarks Bar' ||
+          b.path === 'Other Bookmarks' ||
+          b.path === 'Yer İşaretleri Çubuğu' ||
+          b.path === 'Diğer Yer İşaretleri'
+      );
+    } else if (q === 'is:single-domain') {
+      const counts = new Map<string, number>();
+      for (const b of flatBookmarks) {
+        if (b.domain) counts.set(b.domain, (counts.get(b.domain) || 0) + 1);
+      }
+      result = result.filter((b) => b.domain && counts.get(b.domain) === 1);
+    } else if (q) {
       result = result.filter(
         (b) =>
           b.title.toLowerCase().includes(q) ||
@@ -282,12 +318,14 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
               ) : (
                 <Folder className="size-3.5 shrink-0 fill-amber-500/20 text-amber-500" />
               )}
-              <span className="truncate">{node.title || 'Untitled Folder'}</span>
+              <span className="truncate" title={thisPath}>
+                {formatFolderTitle(node.title, thisPath, lang)}
+              </span>
             </div>
 
             <Badge
               variant="secondary"
-              className="text-muted-foreground h-4 shrink-0 px-1 py-0 font-mono text-[10px]"
+              className="text-muted-foreground h-4 shrink-0 px-1.5 py-0 text-[10px]"
             >
               {childCount}
             </Badge>
@@ -322,6 +360,14 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
       dateAdded: node.dateAdded,
     };
 
+    const trimmedTitle = node.title?.trim() || '';
+    const hasCustomTitle = Boolean(
+      trimmedTitle &&
+      !trimmedTitle.startsWith('http://') &&
+      !trimmedTitle.startsWith('https://') &&
+      trimmedTitle.toLowerCase() !== flatItem.domain.toLowerCase()
+    );
+
     return (
       <div
         key={node.id}
@@ -339,16 +385,23 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
               (e.target as HTMLElement).style.display = 'none';
             }}
           />
-          {node.title && !node.title.startsWith('http://') && !node.title.startsWith('https://') ? (
-            <a
-              href={node.url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-foreground hover:text-primary cursor-pointer truncate font-medium transition-colors"
-              title={node.title}
-            >
-              {node.title}
-            </a>
+          {hasCustomTitle ? (
+            <>
+              <a
+                href={node.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-foreground hover:text-primary cursor-pointer truncate font-medium transition-colors"
+                title={node.title}
+              >
+                {node.title}
+              </a>
+              {flatItem.domain && (
+                <span className="text-muted-foreground/70 max-w-[120px] shrink-0 truncate font-mono text-[10px]">
+                  {flatItem.domain}
+                </span>
+              )}
+            </>
           ) : (
             <a
               href={node.url}
@@ -357,13 +410,8 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
               className="text-muted-foreground hover:text-foreground cursor-pointer truncate font-mono text-[11px] transition-colors"
               title={node.url}
             >
-              {flatItem.domain ? `${flatItem.domain} ↗` : node.url}
+              {flatItem.domain || node.url}
             </a>
-          )}
-          {flatItem.domain && (
-            <span className="text-muted-foreground/70 max-w-[120px] shrink-0 truncate text-[10px]">
-              {flatItem.domain}
-            </span>
           )}
         </div>
 
@@ -402,7 +450,7 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-4">
+    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
       {/* Top Toolbar */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
         <div>

@@ -26,6 +26,7 @@ import React, { useState, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
+import { formatFolderTitle, formatShortFolderPath } from '@/lib/utils';
 import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import { calculateInsights } from '@/services/insights';
 import type { InsightsData } from '@/types';
@@ -45,14 +46,34 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
 }) {
   const { t, lang } = useI18n();
   const [data, setData] = useState<InsightsData | null>(null);
+  const [hasScanned404, setHasScanned404] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [copiedSummary, setCopiedSummary] = useState(false);
+
+  const formatPct = (count: number, pct: number) => {
+    if (count > 0 && pct === 0) return '<1%';
+    return `${pct}%`;
+  };
 
   const loadMetrics = async () => {
     setIsLoading(true);
     try {
+      let knownBrokenCount = 0;
+      let scanned = false;
+      try {
+        const rawScan = localStorage.getItem('last_broken_scan');
+        if (rawScan) {
+          const parsed = JSON.parse(rawScan);
+          if (typeof parsed?.brokenCount === 'number') {
+            knownBrokenCount = parsed.brokenCount;
+            scanned = true;
+          }
+        }
+      } catch {}
+      setHasScanned404(scanned);
+
       const tree = await getBookmarkTree();
-      const insights = calculateInsights(tree);
+      const insights = calculateInsights(tree, knownBrokenCount);
       setData(insights);
     } catch (err) {
       console.error('Failed to load insights:', err);
@@ -168,7 +189,7 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col space-y-4 p-4">
+    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3">
       {/* Header */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
         <div>
@@ -203,24 +224,18 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
           <p className="text-xs">{t('calculatingInsights') || 'Calculating insights...'}</p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3.5">
           {/* ==================== 1. HEALTH SCORE HERO CARD ==================== */}
-          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <span className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
+          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-3.5 shadow-2xs">
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <span className="text-muted-foreground block text-[11px] font-medium tracking-wider uppercase">
                   {t('overallHealth') || 'Overall Health Score'}
                 </span>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-foreground font-mono text-3xl font-bold tracking-tight">
-                    {data.healthScore}
-                  </span>
-                  <span className="text-muted-foreground text-xs font-medium">/ 100</span>
-                </div>
-                <div className="flex items-center gap-1.5 pt-0.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <Badge
                     variant="outline"
-                    className={`px-2 py-0.5 text-[10px] font-semibold ${getScoreColor(
+                    className={`px-2 py-0.5 text-[10.5px] font-semibold ${getScoreColor(
                       data.healthScore
                     )}`}
                   >
@@ -236,17 +251,18 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 </div>
               </div>
 
-              {/* Visual Ring / Badge Representation */}
+              {/* Single Health Score Ring Representation */}
               <div
-                className={`flex size-16 shrink-0 items-center justify-center rounded-full border-4 font-mono text-lg font-bold shadow-xs ${getScoreColor(
+                className={`flex size-14 shrink-0 flex-col items-center justify-center rounded-full border-4 shadow-xs ${getScoreColor(
                   data.healthScore
                 )}`}
               >
-                {data.healthScore}%
+                <span className="text-base leading-none font-bold">{data.healthScore}</span>
+                <span className="text-[8.5px] font-medium opacity-75">/ 100</span>
               </div>
             </div>
 
-            {/* Score Deductions Breakdown */}
+            {/* Score Deductions Breakdown — Line-by-line & each row linked to Doctor */}
             {(data.penalties.duplicates > 0 ||
               data.penalties.emptyFolders > 0 ||
               data.penalties.insecureHttp > 0 ||
@@ -254,36 +270,64 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
               <div className="border-border/40 bg-muted/20 space-y-1.5 rounded-lg border p-2.5 text-xs">
                 <div className="text-muted-foreground flex items-center justify-between text-[10px] font-semibold tracking-wider uppercase">
                   <span>{t('scoreBreakdown') || 'Score Deductions'}</span>
-                  <span className="font-mono">-{100 - data.healthScore} pts</span>
+                  <span>-{100 - data.healthScore} pts</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="divide-border/30 flex flex-col divide-y text-[11px]">
                   {data.penalties.duplicates > 0 && (
-                    <div className="flex items-center justify-between text-amber-600 dark:text-amber-400">
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToDoctor?.('duplicates')}
+                      className="hover:bg-muted/40 flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left text-amber-600 transition-colors dark:text-amber-400"
+                      title={t('openDoctor') || 'Open Duplicates in Doctor'}
+                    >
                       <span>• {t('deductDuplicates') || 'Duplicates'}</span>
-                      <span className="font-mono font-medium">-{data.penalties.duplicates}</span>
-                    </div>
+                      <span className="flex items-center gap-1 font-semibold">
+                        -{data.penalties.duplicates}
+                        <ArrowRight className="size-2.5 opacity-70" />
+                      </span>
+                    </button>
                   )}
                   {data.penalties.emptyFolders > 0 && (
-                    <div className="flex items-center justify-between text-blue-600 dark:text-blue-400">
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToDoctor?.('empty')}
+                      className="hover:bg-muted/40 flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left text-blue-600 transition-colors dark:text-blue-400"
+                      title={t('openDoctor') || 'Open Empty Folders in Doctor'}
+                    >
                       <span>• {t('deductEmpty') || 'Empty folders'}</span>
-                      <span className="font-mono font-medium">-{data.penalties.emptyFolders}</span>
-                    </div>
+                      <span className="flex items-center gap-1 font-semibold">
+                        -{data.penalties.emptyFolders}
+                        <ArrowRight className="size-2.5 opacity-70" />
+                      </span>
+                    </button>
                   )}
                   {data.penalties.insecureHttp > 0 && (
-                    <div
+                    <button
+                      type="button"
                       onClick={() => onNavigateToDoctor?.('insecure')}
-                      className="text-muted-foreground flex cursor-pointer items-center justify-between transition-colors hover:text-amber-500"
-                      title={t('openDoctor') || 'Open in Doctor'}
+                      className="text-muted-foreground hover:bg-muted/40 hover:text-foreground flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left transition-colors"
+                      title={t('openDoctor') || 'Open Insecure HTTP in Doctor'}
                     >
                       <span>• {t('deductHttp') || 'Insecure HTTP'}</span>
-                      <span className="font-mono font-medium">-{data.penalties.insecureHttp}</span>
-                    </div>
+                      <span className="flex items-center gap-1 font-semibold">
+                        -{data.penalties.insecureHttp}
+                        <ArrowRight className="size-2.5 opacity-70" />
+                      </span>
+                    </button>
                   )}
                   {data.penalties.brokenLinks > 0 && (
-                    <div className="flex items-center justify-between text-rose-600 dark:text-rose-400">
-                      <span>• {t('deductBroken') || 'Broken/404'}</span>
-                      <span className="font-mono font-medium">-{data.penalties.brokenLinks}</span>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToDoctor?.('404')}
+                      className="hover:bg-muted/40 flex w-full cursor-pointer items-center justify-between rounded px-1 py-1 text-left text-rose-600 transition-colors dark:text-rose-400"
+                      title={t('openDoctor') || 'Open 404 Links in Doctor'}
+                    >
+                      <span>• {t('deductBroken') || 'Broken / 404'}</span>
+                      <span className="flex items-center gap-1 font-semibold">
+                        -{data.penalties.brokenLinks}
+                        <ArrowRight className="size-2.5 opacity-70" />
+                      </span>
+                    </button>
                   )}
                 </div>
               </div>
@@ -313,12 +357,12 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 )}
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-base font-bold">{data.duplicateCount}</span>
-                <span className="text-muted-foreground text-[9.5px]">
-                  {data.duplicateCount === 0
-                    ? t('allClear') || 'All clear'
-                    : t('openDoctor') || 'Open Doctor'}
-                </span>
+                <span className="text-base font-bold">{data.duplicateCount}</span>
+                {data.duplicateCount === 0 && (
+                  <span className="text-muted-foreground text-[9.5px]">
+                    {t('allClear') || 'All clear'}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -343,12 +387,12 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 )}
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-base font-bold">{data.similarCount || 0}</span>
-                <span className="text-muted-foreground text-[9.5px]">
-                  {(data.similarCount || 0) === 0
-                    ? t('allClear') || 'All clear'
-                    : t('openDoctor') || 'Open Doctor'}
-                </span>
+                <span className="text-base font-bold">{data.similarCount || 0}</span>
+                {(data.similarCount || 0) === 0 && (
+                  <span className="text-muted-foreground text-[9.5px]">
+                    {t('allClear') || 'All clear'}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -373,12 +417,12 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 )}
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-base font-bold">{data.trackingCount || 0}</span>
-                <span className="text-muted-foreground text-[9.5px]">
-                  {(data.trackingCount || 0) === 0
-                    ? t('allClear') || 'All clear'
-                    : t('openDoctor') || 'Open Doctor'}
-                </span>
+                <span className="text-base font-bold">{data.trackingCount || 0}</span>
+                {(data.trackingCount || 0) === 0 && (
+                  <span className="text-muted-foreground text-[9.5px]">
+                    {t('allClear') || 'All clear'}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -403,12 +447,12 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 )}
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-base font-bold">{data.httpCount}</span>
-                <span className="text-muted-foreground text-[9.5px]">
-                  {data.httpCount === 0
-                    ? t('allClear') || 'All clear'
-                    : t('upgradeSingleBtn') || 'Upgrade'}
-                </span>
+                <span className="text-base font-bold">{data.httpCount}</span>
+                {data.httpCount === 0 && (
+                  <span className="text-muted-foreground text-[9.5px]">
+                    {t('allClear') || 'All clear'}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -416,29 +460,43 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
             <div
               onClick={() => onNavigateToDoctor?.('404')}
               className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
-                (data.brokenCount || 0) > 0
+                hasScanned404 && (data.brokenCount || 0) > 0
                   ? 'border-rose-500/30 bg-rose-500/5'
-                  : 'border-border/50 bg-card'
+                  : !hasScanned404
+                    ? 'border-border/40 bg-muted/15 opacity-80'
+                    : 'border-border/50 bg-card'
               }`}
               title={t('openDoctor') || 'Open in Doctor'}
             >
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground text-[10.5px] font-medium">404 Links</span>
-                {(data.brokenCount || 0) > 0 ? (
+                {hasScanned404 && (data.brokenCount || 0) > 0 ? (
                   <AlertTriangle className="size-3 text-rose-500" />
+                ) : hasScanned404 ? (
+                  <CheckCircle2 className="size-3 text-emerald-500" />
                 ) : (
-                  <Radio className="text-muted-foreground/60 size-3" />
+                  <Radio className="text-muted-foreground/50 size-3" />
                 )}
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-base font-bold">{data.brokenCount || 0}</span>
-                <span className="text-muted-foreground text-[9.5px]">
-                  {(data.brokenCount || 0) === 0 ? 'Run scan' : 'View dead'}
-                </span>
+                {hasScanned404 ? (
+                  <>
+                    <span className="text-base font-bold">{data.brokenCount || 0}</span>
+                    {(data.brokenCount || 0) === 0 && (
+                      <span className="text-muted-foreground text-[9.5px]">
+                        {t('allClear') || 'All clear'}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-muted-foreground text-xs font-medium italic">
+                    {lang === 'tr' ? 'Taranmadı' : 'Not scanned'}
+                  </span>
+                )}
               </div>
             </div>
 
-            {/* Chip 5: Empty Folders */}
+            {/* Chip 6: Empty Folders */}
             <div
               onClick={() => onNavigateToDoctor?.('empty')}
               className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 transition-all duration-120 active:scale-[0.98] ${
@@ -459,43 +517,43 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 )}
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-base font-bold">{data.emptyFolderCount}</span>
-                <span className="text-muted-foreground text-[9.5px]">
-                  {data.emptyFolderCount === 0
-                    ? t('allClear') || 'All clear'
-                    : t('openDoctor') || 'Open Doctor'}
-                </span>
+                <span className="text-base font-bold">{data.emptyFolderCount}</span>
+                {data.emptyFolderCount === 0 && (
+                  <span className="text-muted-foreground text-[9.5px]">
+                    {t('allClear') || 'All clear'}
+                  </span>
+                )}
               </div>
             </div>
           </div>
 
           {/* ==================== 3. 4 KEY METRIC CARDS ==================== */}
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-2.5">
               <div className="text-muted-foreground flex items-center justify-between">
                 <span className="text-[11px] font-medium">{t('totalLinks') || 'Links'}</span>
                 <Bookmark className="size-3.5" />
               </div>
-              <p className="text-foreground font-mono text-lg font-bold">{data.totalBookmarks}</p>
+              <p className="text-foreground text-lg font-bold">{data.totalBookmarks}</p>
             </div>
 
-            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-3">
+            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-2.5">
               <div className="text-muted-foreground flex items-center justify-between">
                 <span className="text-[11px] font-medium">{t('totalFolders') || 'Folders'}</span>
                 <Folder className="size-3.5" />
               </div>
-              <p className="text-foreground font-mono text-lg font-bold">{data.totalFolders}</p>
+              <p className="text-foreground text-lg font-bold">{data.totalFolders}</p>
             </div>
 
-            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-3">
+            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-2.5">
               <div className="text-muted-foreground flex items-center justify-between">
                 <span className="text-[11px] font-medium">{t('uniqueDomains') || 'Domains'}</span>
                 <Globe className="size-3.5" />
               </div>
-              <p className="text-foreground font-mono text-lg font-bold">{data.uniqueDomains}</p>
+              <p className="text-foreground text-lg font-bold">{data.uniqueDomains}</p>
             </div>
 
-            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-3">
+            <div className="border-border/50 bg-muted/15 space-y-1 rounded-lg border p-2.5">
               <div className="text-muted-foreground flex items-center justify-between">
                 <span className="text-[11px] font-medium">{t('httpsRatio') || 'HTTPS'}</span>
                 {data.httpsRatio >= 90 ? (
@@ -504,12 +562,12 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                   <ShieldAlert className="size-3.5 text-amber-500" />
                 )}
               </div>
-              <p className="text-foreground font-mono text-lg font-bold">{data.httpsRatio}%</p>
+              <p className="text-foreground text-lg font-bold">{data.httpsRatio}%</p>
             </div>
           </div>
 
           {/* ==================== 4. LIBRARY FACTS & TRIVIA (STAR FEATURE ⭐) ==================== */}
-          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+          <div className="border-border/60 bg-card space-y-2.5 rounded-xl border p-3.5 shadow-2xs">
             <div className="flex items-center gap-1.5">
               <Sparkles className="size-3.5 text-amber-500" />
               <h3 className="text-foreground text-xs font-semibold tracking-tight">
@@ -520,8 +578,8 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
             <div className="divide-border/30 divide-y text-xs">
               {/* Oldest Bookmark */}
               {data.oldestBookmark && (
-                <div className="flex items-center justify-between py-2">
-                  <span className="text-muted-foreground flex items-center gap-1.5">
+                <div className="flex items-center justify-between gap-2 py-2">
+                  <span className="text-muted-foreground flex shrink-0 items-center gap-1.5">
                     <Clock className="size-3 text-blue-500" />
                     {t('oldestBookmark') || 'Oldest Bookmark'}
                   </span>
@@ -529,13 +587,13 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                     href={data.oldestBookmark.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-primary flex max-w-[200px] items-center gap-1 truncate text-[11px] font-medium hover:underline"
-                    title={`${data.oldestBookmark.title} (${new Date(
+                    className="text-primary flex min-w-0 items-center gap-1 truncate text-[11px] font-medium hover:underline"
+                    title={`${data.oldestBookmark.title} — ${data.oldestBookmark.domain} (${new Date(
                       data.oldestBookmark.dateAdded
                     ).toLocaleDateString()})`}
                   >
                     <span className="truncate">{data.oldestBookmark.title}</span>
-                    <span className="text-muted-foreground font-mono text-[10px]">
+                    <span className="text-muted-foreground shrink-0 text-[10px]">
                       ({new Date(data.oldestBookmark.dateAdded).getFullYear()})
                     </span>
                     <ExternalLink className="size-2.5 shrink-0 opacity-60" />
@@ -550,7 +608,7 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                     <CalendarDays className="size-3 text-emerald-500" />
                     {t('busiestMonth') || 'Busiest Month'}
                   </span>
-                  <span className="font-mono text-[11px] font-medium">
+                  <span className="text-[11px] font-medium">
                     {new Date(data.busiestMonth.year, data.busiestMonth.month).toLocaleString(
                       lang === 'tr' ? 'tr-TR' : 'en-US',
                       { month: 'short', year: 'numeric' }
@@ -562,61 +620,90 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                 </div>
               )}
 
-              {/* Deepest Nesting */}
-              <div className="flex items-center justify-between py-2">
+              {/* Deepest Nesting (Clickable -> Explorer) */}
+              <div
+                onClick={() => {
+                  const parts = (data.deepestFolderPath || '').split(' / ');
+                  const leaf = parts[parts.length - 1] || '';
+                  onNavigateToExplorer?.(leaf);
+                }}
+                className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                title={
+                  data.deepestFolderPath
+                    ? `Filter Explorer: ${data.deepestFolderPath}`
+                    : 'Open in Explorer'
+                }
+              >
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <Layers className="size-3 text-purple-500" />
                   {t('deepestNesting') || 'Deepest Folder Nesting'}
                 </span>
-                <span
-                  className="font-mono text-[11px] font-medium"
-                  title={data.deepestFolderPath || undefined}
-                >
+                <span className="flex items-center gap-1 text-[11px] font-medium">
                   {data.deepestNesting} {t('levels') || 'levels'}
+                  <ArrowRight className="text-muted-foreground size-2.5" />
                 </span>
               </div>
 
-              {/* Loose Bookmarks (No subfolder) */}
-              <div className="flex items-center justify-between py-2">
+              {/* Loose Bookmarks (Clickable -> Explorer filtered to is:loose) */}
+              <div
+                onClick={() => onNavigateToExplorer?.('is:loose')}
+                className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                title={
+                  lang === 'tr'
+                    ? 'Klasörsüz yer imlerini Gezginde filtrele'
+                    : 'Filter loose bookmarks in Explorer'
+                }
+              >
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <Bookmark className="size-3 text-amber-500" />
                   {t('looseBookmarks') || 'Loose Bookmarks (No Folder)'}
                 </span>
-                <button
-                  onClick={() => onNavigateToExplorer?.('Bookmarks Bar')}
-                  className="text-foreground hover:text-primary cursor-pointer font-mono text-[11px] font-medium"
-                  title="Filter in Explorer"
-                >
+                <span className="flex items-center gap-1 text-[11px] font-medium">
                   {data.looseBookmarksCount}
-                </button>
+                  <ArrowRight className="text-muted-foreground size-2.5" />
+                </span>
               </div>
 
-              {/* Average Bookmarks per Folder */}
-              <div className="flex items-center justify-between py-2">
+              {/* Average Bookmarks per Folder (Clickable -> Explorer) */}
+              <div
+                onClick={() => onNavigateToExplorer?.('')}
+                className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                title={lang === 'tr' ? 'Gezginde aç' : 'Open in Explorer'}
+              >
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <FolderTree className="size-3 text-sky-500" />
                   {t('avgBookmarksPerFolder') || 'Avg. Bookmarks / Folder'}
                 </span>
-                <span className="font-mono text-[11px] font-medium">
+                <span className="flex items-center gap-1 text-[11px] font-medium">
                   {data.avgBookmarksPerFolder}
+                  <ArrowRight className="text-muted-foreground size-2.5" />
                 </span>
               </div>
 
-              {/* Domains Saved Only Once */}
-              <div className="flex items-center justify-between py-2">
+              {/* Domains Saved Only Once (Clickable -> Explorer filtered to is:single-domain) */}
+              <div
+                onClick={() => onNavigateToExplorer?.('is:single-domain')}
+                className="hover:bg-muted/30 -mx-1 flex cursor-pointer items-center justify-between rounded px-1 py-2 transition-colors"
+                title={
+                  lang === 'tr'
+                    ? 'Tek seferlik domainleri Gezginde filtrele'
+                    : 'Filter single-use domains in Explorer'
+                }
+              >
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <Globe className="size-3 text-indigo-500" />
                   {t('singleUseDomains') || 'Domains Saved Only Once'}
                 </span>
-                <span className="font-mono text-[11px] font-medium">
+                <span className="flex items-center gap-1 text-[11px] font-medium">
                   {data.singleUseDomainsCount}
+                  <ArrowRight className="text-muted-foreground size-2.5" />
                 </span>
               </div>
             </div>
           </div>
 
           {/* ==================== 5. BOOKMARK AGE DISTRIBUTION ==================== */}
-          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-3.5 shadow-2xs">
             <div className="flex items-center justify-between">
               <h3 className="text-foreground text-xs font-semibold tracking-tight">
                 {t('bookmarkAgeTitle') || 'Bookmark Age Distribution'}
@@ -657,8 +744,13 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                   <span className="size-1.5 rounded-full bg-emerald-500" />
                   <span>{t('under6mo') || '< 6 months'}</span>
                 </div>
-                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
-                  <span>{data.ageDistribution.under6Months.percentage}%</span>
+                <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                  <span>
+                    {formatPct(
+                      data.ageDistribution.under6Months.count,
+                      data.ageDistribution.under6Months.percentage
+                    )}
+                  </span>
                   <span className="text-muted-foreground text-[9.5px] font-normal">
                     ({data.ageDistribution.under6Months.count})
                   </span>
@@ -670,8 +762,13 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                   <span className="size-1.5 rounded-full bg-sky-500" />
                   <span>{t('sixTo12mo') || '6 - 12 months'}</span>
                 </div>
-                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
-                  <span>{data.ageDistribution.sixTo12Months.percentage}%</span>
+                <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                  <span>
+                    {formatPct(
+                      data.ageDistribution.sixTo12Months.count,
+                      data.ageDistribution.sixTo12Months.percentage
+                    )}
+                  </span>
                   <span className="text-muted-foreground text-[9.5px] font-normal">
                     ({data.ageDistribution.sixTo12Months.count})
                   </span>
@@ -683,8 +780,13 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                   <span className="size-1.5 rounded-full bg-amber-500" />
                   <span>{t('oneTo3yr') || '1 - 3 years'}</span>
                 </div>
-                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
-                  <span>{data.ageDistribution.oneTo3Years.percentage}%</span>
+                <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                  <span>
+                    {formatPct(
+                      data.ageDistribution.oneTo3Years.count,
+                      data.ageDistribution.oneTo3Years.percentage
+                    )}
+                  </span>
                   <span className="text-muted-foreground text-[9.5px] font-normal">
                     ({data.ageDistribution.oneTo3Years.count})
                   </span>
@@ -696,8 +798,13 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
                   <span className="size-1.5 rounded-full bg-purple-500" />
                   <span>{t('over3yr') || '3+ years'}</span>
                 </div>
-                <div className="flex items-baseline gap-1 font-mono text-[11px] font-semibold">
-                  <span>{data.ageDistribution.over3Years.percentage}%</span>
+                <div className="flex items-baseline gap-1 text-[11px] font-semibold">
+                  <span>
+                    {formatPct(
+                      data.ageDistribution.over3Years.count,
+                      data.ageDistribution.over3Years.percentage
+                    )}
+                  </span>
                   <span className="text-muted-foreground text-[9.5px] font-normal">
                     ({data.ageDistribution.over3Years.count})
                   </span>
@@ -708,7 +815,7 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
 
           {/* ==================== 6. LARGEST FOLDERS ==================== */}
           {data.topFolders.length > 0 && (
-            <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+            <div className="border-border/60 bg-card space-y-3 rounded-xl border p-3.5 shadow-2xs">
               <div className="flex items-center justify-between">
                 <h3 className="text-foreground text-xs font-semibold tracking-tight">
                   {t('largestFoldersTitle') || 'Largest Folders'}
@@ -719,42 +826,51 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
               </div>
 
               <div className="space-y-2">
-                {data.topFolders.map((folder) => (
-                  <div
-                    key={folder.id}
-                    onClick={() => onNavigateToExplorer?.(folder.title)}
-                    className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1.5 transition-colors"
-                    title={`Click to filter Explorer by folder "${folder.title}"`}
-                  >
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <Folder className="size-3.5 shrink-0 text-amber-500" />
-                        <span className="text-foreground group-hover:text-primary truncate text-[11px] font-medium transition-colors">
-                          {folder.title}
-                        </span>
-                        <span className="text-muted-foreground/60 hidden truncate text-[9.5px] sm:inline">
-                          ({folder.path})
-                        </span>
-                      </div>
-                      <span className="text-muted-foreground group-hover:text-foreground shrink-0 font-mono text-[10.5px]">
-                        {folder.count} links ({folder.percentage}%)
-                      </span>
-                    </div>
-
-                    <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                {(() => {
+                  const maxFolderCount = Math.max(1, data.topFolders[0]?.count || 1);
+                  return data.topFolders.map((folder) => {
+                    const barWidth = Math.round((folder.count / maxFolderCount) * 100);
+                    return (
                       <div
-                        className="h-full rounded-full bg-amber-500/70 transition-[width] duration-300 ease-out"
-                        style={{ width: `${Math.min(100, Math.max(4, folder.percentage))}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                        key={folder.id}
+                        onClick={() => onNavigateToExplorer?.(folder.title)}
+                        className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1.5 transition-colors"
+                        title={`${folder.path} — Click to filter Explorer`}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <Folder className="size-3.5 shrink-0 text-amber-500" />
+                            <span className="text-foreground group-hover:text-primary truncate text-[11px] font-medium transition-colors">
+                              {formatFolderTitle(folder.title, folder.path, lang)}
+                            </span>
+                            <span
+                              className="text-muted-foreground/60 hidden truncate text-[9.5px] sm:inline"
+                              title={folder.path}
+                            >
+                              ({formatShortFolderPath(folder.path, lang)})
+                            </span>
+                          </div>
+                          <span className="text-muted-foreground group-hover:text-foreground shrink-0 text-[10.5px]">
+                            {folder.count} links ({formatPct(folder.count, folder.percentage)})
+                          </span>
+                        </div>
+
+                        <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                          <div
+                            className="h-full rounded-full bg-amber-500 transition-[width] duration-300 ease-out"
+                            style={{ width: `${barWidth}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           )}
 
           {/* ==================== 7. TOP DOMAINS DISTRIBUTION ==================== */}
-          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-4 shadow-2xs">
+          <div className="border-border/60 bg-card space-y-3 rounded-xl border p-3.5 shadow-2xs">
             <div className="flex items-center justify-between">
               <h3 className="text-foreground text-xs font-semibold tracking-tight">
                 {t('topDomainsTitle') || 'Top Bookmarked Domains'}
@@ -770,42 +886,48 @@ export const Insights: React.FC<InsightsProps> = React.memo(function Insights({
               </p>
             ) : (
               <div className="space-y-1.5">
-                {data.topDomains.map((item) => (
-                  <div
-                    key={item.domain}
-                    onClick={() => onNavigateToExplorer?.(item.domain)}
-                    className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1 transition-colors"
-                    title={`Click to filter Explorer by ${item.domain}`}
-                  >
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <img
-                          src={`https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(
-                            `https://${item.domain}`
-                          )}&sz=32`}
-                          alt=""
-                          className="size-3.5 shrink-0 rounded-xs"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                        <span className="text-foreground group-hover:text-primary truncate text-[11px] font-medium transition-colors">
-                          {item.domain}
-                        </span>
-                      </div>
-                      <span className="text-muted-foreground group-hover:text-foreground shrink-0 font-mono text-[10.5px]">
-                        {item.count} ({item.percentage}%)
-                      </span>
-                    </div>
-
-                    <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                {(() => {
+                  const maxDomainCount = Math.max(1, data.topDomains[0]?.count || 1);
+                  return data.topDomains.map((item) => {
+                    const barWidth = Math.round((item.count / maxDomainCount) * 100);
+                    return (
                       <div
-                        className="bg-primary/70 h-full rounded-full transition-[width] duration-300 ease-out"
-                        style={{ width: `${Math.min(100, Math.max(4, item.percentage))}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                        key={item.domain}
+                        onClick={() => onNavigateToExplorer?.(item.domain)}
+                        className="hover:bg-muted/40 group cursor-pointer space-y-1 rounded-md p-1 transition-colors"
+                        title={`Click to filter Explorer by ${item.domain}`}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <img
+                              src={`https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(
+                                `https://${item.domain}`
+                              )}&sz=32`}
+                              alt=""
+                              className="size-3.5 shrink-0 rounded-xs"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                            <span className="text-foreground group-hover:text-primary truncate font-mono text-[11px] font-medium transition-colors">
+                              {item.domain}
+                            </span>
+                          </div>
+                          <span className="text-muted-foreground group-hover:text-foreground shrink-0 text-[10.5px]">
+                            {item.count} ({formatPct(item.count, item.percentage)})
+                          </span>
+                        </div>
+
+                        <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
+                          <div
+                            className="bg-foreground/60 h-full rounded-full transition-[width] duration-300 ease-out"
+                            style={{ width: `${barWidth}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             )}
           </div>

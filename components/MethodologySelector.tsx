@@ -32,7 +32,7 @@ export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
           <span className="text-foreground/90 text-xs font-semibold">
             {isTr ? 'Organizasyon Metotları & Stiller' : 'Architecture Methodologies'}
           </span>
-          <Badge variant="outline" className="h-4 px-1.5 font-mono text-[9px]">
+          <Badge variant="outline" className="h-4 px-1.5 text-[9px]">
             {METHODOLOGY_PRESETS.length}
           </Badge>
         </div>
@@ -42,9 +42,9 @@ export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
         </div>
       </button>
 
-      {/* Quick horizontal scroll pills when collapsed */}
+      {/* Wrapped pills when collapsed so nothing is horizontally clipped */}
       {!isOpen && (
-        <div className="-mx-1 mt-1.5 flex scrollbar-none gap-1 overflow-x-auto px-1 pt-0.5 pb-0.5">
+        <div className="mt-1.5 flex flex-wrap gap-1 pt-0.5">
           {METHODOLOGY_PRESETS.map((preset) => {
             const isSelected = activeMethodologyId === preset.id;
             return (

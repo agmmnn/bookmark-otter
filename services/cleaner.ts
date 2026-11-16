@@ -817,3 +817,64 @@ export async function upgradeMultipleBookmarksToHttps(
   }
   return count;
 }
+
+/**
+ * Restore original URLs for a list of bookmarks (used by 1-click Undo on URL clean / HTTPS upgrade)
+ */
+export async function restoreBookmarkUrls(
+  items: { id: string; originalUrl: string }[]
+): Promise<number> {
+  let count = 0;
+  for (const item of items) {
+    try {
+      await browser.bookmarks.update(item.id, { url: item.originalUrl });
+      count++;
+    } catch (err) {
+      console.warn(`Failed to restore URL for bookmark ${item.id}:`, err);
+    }
+  }
+  return count;
+}
+
+/**
+ * Verifies whether the HTTPS version of each HTTP bookmark responds without error.
+ */
+export async function verifyHttpsSupportBatch(
+  bookmarks: FlatBookmark[],
+  onProgress?: (checked: number, total: number, id: string, supported: boolean) => void,
+  signal?: AbortSignal,
+  concurrency = 8
+): Promise<Map<string, boolean>> {
+  const results = new Map<string, boolean>();
+  let index = 0;
+  let completed = 0;
+  const total = bookmarks.length;
+
+  async function worker() {
+    while (index < total) {
+      if (signal?.aborted) break;
+      const currentIndex = index++;
+      const item = bookmarks[currentIndex];
+      if (!item) continue;
+
+      const httpsUrl = item.url.replace(/^http:\/\//i, 'https://');
+      try {
+        const res = await testUrlHealth(httpsUrl, 5000, signal);
+        const supported = res.status === 'healthy' || res.status === 'protected';
+        results.set(item.id, supported);
+        completed++;
+        onProgress?.(completed, total, item.id, supported);
+      } catch {
+        if (signal?.aborted) break;
+        results.set(item.id, false);
+        completed++;
+        onProgress?.(completed, total, item.id, false);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker());
+  await Promise.all(workers);
+
+  return results;
+}

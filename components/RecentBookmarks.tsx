@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
+import { formatShortFolderPath } from '@/lib/utils';
 import { suggestForNewBookmarkViaBackground } from '@/services/aiClient';
 import { getRecentBookmarks, getBookmarkTree, getAllFolders } from '@/services/bookmarks';
 import type { FlatBookmark, PendingSuggestion } from '@/types';
@@ -29,7 +30,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
   onBookmarkChanged,
   onOpenSettings,
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [bookmarks, setBookmarks] = useState<FlatBookmark[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadingItemId, setLoadingItemId] = useState<string | null>(null);
@@ -230,7 +231,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
             return (
               <div
                 key={b.id}
-                className={`space-y-1.5 rounded-lg border p-2 text-xs transition-[border-color,background-color,transform] duration-150 ${
+                className={`group space-y-1.5 rounded-lg border p-2 text-xs transition-[border-color,background-color,transform] duration-150 ${
                   wasJustApplied
                     ? 'border-emerald-500/50 bg-emerald-500/10'
                     : isCurrentSuggestion
@@ -255,7 +256,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                     <div className="min-w-0 flex-1 space-y-0.5">
                       <div
                         className="text-foreground truncate text-[11px] leading-tight font-medium"
-                        title={b.title}
+                        title={b.title || b.url}
                       >
                         {b.title || b.domain}
                       </div>
@@ -270,7 +271,9 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                           title={b.path}
                         >
                           <Folder className="size-2.5 shrink-0" />
-                          <span className="max-w-[120px] truncate">{b.path}</span>
+                          <span className="max-w-[125px] truncate">
+                            {formatShortFolderPath(b.path, lang)}
+                          </span>
                         </span>
                         {b.dateAdded && (
                           <>
@@ -282,8 +285,14 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                     </div>
                   </div>
 
-                  {/* Actions Right */}
-                  <div className="flex shrink-0 items-center gap-1 opacity-80 transition-opacity group-hover:opacity-100">
+                  {/* Actions Right — Shown on hover (or when active/analyzing) to avoid visual noise */}
+                  <div
+                    className={`flex shrink-0 items-center gap-1 transition-opacity duration-150 ${
+                      isAnalyzing || isCurrentSuggestion || wasJustApplied
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+                    }`}
+                  >
                     <a
                       href={b.url}
                       target="_blank"
@@ -296,10 +305,10 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
 
                     <Button
                       size="xs"
-                      variant="ghost"
+                      variant="outline"
                       onClick={() => handleRequestSuggestion(b)}
                       disabled={isAnalyzing}
-                      className="h-6 cursor-pointer gap-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-1.5 text-[10px] font-medium text-amber-800 transition-all duration-120 hover:bg-amber-500/20 active:scale-[0.95] dark:text-amber-200"
+                      className="border-border/70 bg-background/80 h-6 cursor-pointer gap-1 rounded-md px-1.5 text-[10px] font-medium transition-all duration-120 hover:border-amber-400/50 hover:bg-amber-500/10 active:scale-[0.95]"
                       title={t('aiSuggestBtn')}
                     >
                       {isAnalyzing ? (
@@ -307,7 +316,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                       ) : wasJustApplied ? (
                         <Check className="size-3 text-emerald-500" />
                       ) : (
-                        <Sparkles className="size-3 fill-amber-500/20 text-amber-500" />
+                        <Sparkles className="size-3 text-amber-500" />
                       )}
                       <span>{wasJustApplied ? t('doneBtn') : t('aiSuggestBtn')}</span>
                     </Button>
