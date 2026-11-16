@@ -27,7 +27,7 @@ export function getModel() {
           );
         }
         const google = createGoogleGenerativeAI({ apiKey: settings.geminiApiKey });
-        return google(settings.modelName || 'gemini-2.5-flash');
+        return google(settings.modelName || 'gemini-3.8-flash');
       }
       case 'openai': {
         if (!settings.openaiApiKey) {
@@ -38,7 +38,7 @@ export function getModel() {
           );
         }
         const openai = createOpenAI({ apiKey: settings.openaiApiKey });
-        return openai(settings.modelName || 'gpt-4o-mini');
+        return openai(settings.modelName || 'gpt-5.6');
       }
       case 'anthropic': {
         if (!settings.anthropicApiKey) {
@@ -49,7 +49,7 @@ export function getModel() {
           );
         }
         const anthropic = createAnthropic({ apiKey: settings.anthropicApiKey });
-        return anthropic(settings.modelName || 'claude-3-7-sonnet-latest');
+        return anthropic(settings.modelName || 'claude-sonnet-5');
       }
       case 'xai': {
         if (!settings.xaiApiKey) {
@@ -60,7 +60,7 @@ export function getModel() {
           );
         }
         const xai = createXai({ apiKey: settings.xaiApiKey });
-        return xai(settings.modelName || 'grok-4');
+        return xai(settings.modelName || 'grok-4.5');
       }
       case 'groq': {
         if (!settings.groqApiKey) {
@@ -71,7 +71,7 @@ export function getModel() {
           );
         }
         const groq = createGroq({ apiKey: settings.groqApiKey });
-        return groq(settings.modelName || 'llama-3.3-70b-versatile');
+        return groq(settings.modelName || 'meta-llama/llama-4-scout-17b-16e-instruct');
       }
       case 'deepseek': {
         if (!settings.deepseekApiKey) {
@@ -82,11 +82,11 @@ export function getModel() {
           );
         }
         const deepseek = createDeepSeek({ apiKey: settings.deepseekApiKey });
-        return deepseek(settings.modelName || 'deepseek-chat');
+        return deepseek(settings.modelName || 'deepseek-v4-flash');
       }
       default: {
         const google = createGoogleGenerativeAI({ apiKey: settings.geminiApiKey });
-        return google(settings.modelName || 'gemini-2.5-flash');
+        return google(settings.modelName || 'gemini-3.8-flash');
       }
     }
   };

@@ -16,7 +16,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   xaiApiKey: '',
   groqApiKey: '',
   deepseekApiKey: '',
-  modelName: 'gemini-2.5-flash',
+  modelName: 'gemini-3.8-flash',
   language: 'en',
 };
 
@@ -44,8 +44,8 @@ export async function getSettings(): Promise<AppSettings> {
         'google',
       modelName:
         typeof process !== 'undefined'
-          ? process.env?.MODEL_NAME || 'gemini-2.5-flash'
-          : 'gemini-2.5-flash',
+          ? process.env?.MODEL_NAME || 'gemini-3.8-flash'
+          : 'gemini-3.8-flash',
       language:
         (typeof process !== 'undefined' ? (process.env?.APP_LANG as any) : undefined) || 'en',
     };

@@ -1,11 +1,11 @@
 import { cn } from 'cn';
-import { Settings, Globe, Sun, Moon } from 'lucide-react';
+import { Settings, Sun, Moon } from 'lucide-react';
 import React from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { useI18n, type Language } from '@/lib/i18n';
+import { useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 
 interface HeaderProps {
@@ -13,13 +13,8 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
-  const { lang, setLang, t } = useI18n();
+  const { t } = useI18n();
   const { isDark, toggleTheme } = useTheme();
-
-  const toggleLanguage = () => {
-    const next: Language = lang === 'en' ? 'tr' : 'en';
-    setLang(next);
-  };
 
   return (
     <header className="border-border/60 bg-card/95 sticky top-0 z-20 flex items-center justify-between border-b px-3 py-2 backdrop-blur-xs transition-colors duration-150">
@@ -45,18 +40,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
 
       {/* Header Actions */}
       <div className="flex items-center gap-1">
-        {/* Language Switcher */}
-        <Button
-          size="xs"
-          variant="ghost"
-          onClick={toggleLanguage}
-          title={`Change Language (${lang.toUpperCase()})`}
-          className="text-muted-foreground hover:text-foreground h-6 cursor-pointer gap-1 rounded-md px-1.5 text-[10px] font-medium transition-[transform,background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]"
-        >
-          <Globe className="text-muted-foreground/80 h-3 w-3" />
-          <span>{lang.toUpperCase()}</span>
-        </Button>
-
         {/* Dark / Light Mode Switch (Contextual icon morph & smooth toggle) */}
         <div
           onClick={toggleTheme}

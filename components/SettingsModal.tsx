@@ -10,6 +10,8 @@ import {
   Cpu,
   Sun,
   Moon,
+  Pencil,
+  List,
 } from 'lucide-react';
 import React, { useState, useEffect, useMemo } from 'react';
 
@@ -49,132 +51,110 @@ const PROVIDER_OPTIONS: ProviderConfig[] = [
   {
     value: 'google',
     label: 'Google Gemini',
-    badge: 'Gemini 2.5 / 3.8',
+    badge: 'Gemini 3.5 / 4',
     keyUrl: 'https://aistudio.google.com/app/apikey',
     keyPrefix: 'AIzaSy...',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: 'gemini-3.8-flash',
     isFree: true,
   },
   {
     value: 'openai',
     label: 'OpenAI',
-    badge: 'GPT-4o / GPT-5',
+    badge: 'GPT-5.6 / 6',
     keyUrl: 'https://platform.openai.com/api-keys',
     keyPrefix: 'sk-proj-...',
-    defaultModel: 'gpt-4o-mini',
+    defaultModel: 'gpt-5.6',
   },
   {
     value: 'anthropic',
     label: 'Anthropic Claude',
-    badge: 'Claude 3.7 / 3.5',
+    badge: 'Claude 4.8 / 5',
     keyUrl: 'https://console.anthropic.com/settings/keys',
     keyPrefix: 'sk-ant-...',
-    defaultModel: 'claude-3-7-sonnet-latest',
+    defaultModel: 'claude-sonnet-5',
   },
   {
     value: 'xai',
     label: 'xAI Grok',
-    badge: 'Grok 4 / 3',
+    badge: 'Grok 4 / 4.7',
     keyUrl: 'https://console.x.ai/',
     keyPrefix: 'xai-...',
-    defaultModel: 'grok-4',
+    defaultModel: 'grok-4.5',
   },
   {
     value: 'groq',
-    label: 'Groq (Ultra-Fast)',
-    badge: 'Llama 3.3 70B',
+    label: 'Groq',
+    badge: 'Llama 4 / 3.3',
     keyUrl: 'https://console.groq.com/keys',
     keyPrefix: 'gsk_...',
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
     isFree: true,
   },
   {
     value: 'deepseek',
     label: 'DeepSeek',
-    badge: 'V3 / R1 Reasoner',
+    badge: 'V4 Flash / Pro',
     keyUrl: 'https://platform.deepseek.com/api_keys',
     keyPrefix: 'sk-...',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-flash',
   },
 ];
 
-// Models strictly synchronized with official Vercel AI SDK specification
-// https://ai-sdk.dev/docs/foundations/providers-and-models
-const PROVIDER_MODELS: Record<AIProvider, { id: string; label: string; badge: string }[]> = {
+// Models synchronized with official Vercel AI SDK specification (latest generations only)
+// https://ai-sdk.dev/docs/foundations/providers-and-models.md
+const PROVIDER_MODELS: Record<AIProvider, string[]> = {
   google: [
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', badge: 'Recommended · Fast & Agentic' },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', badge: 'Deep Multimodal Reasoning' },
-    {
-      id: 'gemini-2.5-flash-lite',
-      label: 'Gemini 2.5 Flash Lite',
-      badge: 'Ultra-fast & Cost-Efficient',
-    },
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', badge: 'Real-time & Multimodal' },
-    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', badge: 'Agentic Preview' },
-    { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', badge: 'Flash Hybrid Reasoning' },
-    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', badge: 'Fast & Versatile' },
-    { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', badge: 'Cost-Efficient' },
-    { id: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview', badge: 'Next-Gen Reasoning' },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', badge: 'Next-Gen Flash' },
-    { id: 'gemini-4-argon', label: 'Gemini 4 Argon', badge: 'Frontier Experimental' },
+    'gemini-3.8-flash',
+    'gemini-4-argon',
+    'gemini-4-carbon',
+    'gemini-4-hydrogen',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
   ],
   openai: [
-    { id: 'gpt-4o-mini', label: 'GPT-4o Mini', badge: 'Recommended · Fast & Smart' },
-    { id: 'gpt-4o', label: 'GPT-4o', badge: 'Omni Flagship' },
-    { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', badge: 'High-Efficiency Reasoning' },
-    { id: 'gpt-4.1', label: 'GPT-4.1', badge: 'Next-Gen Frontier Flagship' },
-    { id: 'o3-mini', label: 'o3-mini', badge: 'Math & Coding Reasoning' },
-    { id: 'o1', label: 'o1', badge: 'Deep Reasoning Flagship' },
-    { id: 'gpt-5-mini', label: 'GPT-5 Mini', badge: 'Agentic Frontier Mini' },
-    { id: 'gpt-5', label: 'GPT-5', badge: 'Frontier Model' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', badge: 'Compact Frontier' },
-    { id: 'gpt-5.4', label: 'GPT-5.4', badge: 'Advanced Frontier' },
-    { id: 'gpt-5.6', label: 'GPT-5.6', badge: 'Frontier Flagship' },
-    { id: 'gpt-6-astra', label: 'GPT-6 Astra', badge: 'Frontier Flagship' },
+    'gpt-5.6',
+    'gpt-6.1-sol',
+    'gpt-6.1-terra',
+    'gpt-6-astra',
+    'gpt-6-luna',
+    'gpt-6-sol',
+    'gpt-5.6-luna',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
   ],
   anthropic: [
-    {
-      id: 'claude-3-7-sonnet-latest',
-      label: 'Claude 3.7 Sonnet',
-      badge: 'Recommended · Hybrid Reasoning',
-    },
-    {
-      id: 'claude-3-5-sonnet-latest',
-      label: 'Claude 3.5 Sonnet',
-      badge: 'Deep Intelligence & Code',
-    },
-    { id: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku', badge: 'Ultra-fast & Responsive' },
-    { id: 'claude-3-opus-latest', label: 'Claude 3 Opus', badge: 'Deep Nuance & Logic' },
-    { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', badge: 'Next-Gen Reasoning' },
-    { id: 'claude-opus-4-5', label: 'Claude Opus 4.5', badge: 'Frontier Deep Reasoning' },
-    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', badge: 'Future Frontier' },
+    'claude-sonnet-5',
+    'claude-sonnet-5-5',
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-haiku-5-5',
+    'claude-fable-5-2',
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-opus-4-8',
   ],
   xai: [
-    { id: 'grok-4', label: 'Grok 4', badge: 'Recommended · High Performance' },
-    { id: 'grok-4-fast-reasoning', label: 'Grok 4 Fast Reasoning', badge: 'Real-time Reasoning' },
-    { id: 'grok-3', label: 'Grok 3', badge: 'Deep Reasoning Flagship' },
-    { id: 'grok-3-mini', label: 'Grok 3 Mini', badge: 'Fast & Efficient' },
-    { id: 'grok-4.5', label: 'Grok 4.5', badge: 'Frontier Preview' },
+    'grok-4.5',
+    'grok-4.7',
+    'grok-4.6',
+    'grok-4.20-reasoning',
+    'grok-4.20-non-reasoning',
+    'grok-4-1-fast-reasoning',
+    'grok-4-1-fast-non-reasoning',
+    'grok-4-1',
+    'grok-4-fast-reasoning',
+    'grok-4-fast-non-reasoning',
+    'grok-code-fast-1',
+    'grok-4',
   ],
   groq: [
-    {
-      id: 'llama-3.3-70b-versatile',
-      label: 'Llama 3.3 70B',
-      badge: 'Recommended · Ultra-Low Latency',
-    },
-    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', badge: 'Lightning Fast' },
-    { id: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (32k)', badge: 'Fast MoE' },
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
   ],
-  deepseek: [
-    { id: 'deepseek-chat', label: 'DeepSeek Chat (V3)', badge: 'Recommended · Fast & Smart' },
-    {
-      id: 'deepseek-reasoner',
-      label: 'DeepSeek Reasoner (R1)',
-      badge: 'Deep Math & Code Reasoning',
-    },
-    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', badge: 'High-speed Next-Gen' },
-    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', badge: 'Frontier Reasoning' },
-  ],
+  deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'],
 };
 
 const LANGUAGE_OPTIONS = [
@@ -196,14 +176,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [xaiKey, setXaiKey] = useState('');
   const [groqKey, setGroqKey] = useState('');
   const [deepseekKey, setDeepseekKey] = useState('');
-  const [modelName, setModelName] = useState('gemini-2.5-flash');
+  const [modelName, setModelName] = useState('gemini-3.8-flash');
+  const [isManualModel, setIsManualModel] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       getSettings().then((s) => {
-        setProvider(s.aiProvider || 'google');
+        const activeProvider = s.aiProvider || 'google';
+        setProvider(activeProvider);
         setGeminiKey(s.geminiApiKey || '');
         setOpenaiKey(s.openaiApiKey || '');
         setAnthropicKey(s.anthropicApiKey || '');
@@ -211,9 +193,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setGroqKey(s.groqApiKey || '');
         setDeepseekKey(s.deepseekApiKey || '');
         const defaultForProvider =
-          PROVIDER_OPTIONS.find((p) => p.value === s.aiProvider)?.defaultModel ||
-          'gemini-2.5-flash';
-        setModelName(s.modelName || defaultForProvider);
+          PROVIDER_OPTIONS.find((p) => p.value === activeProvider)?.defaultModel ||
+          'gemini-3.8-flash';
+        const resolvedModel = s.modelName || defaultForProvider;
+        setModelName(resolvedModel);
+        const knownModels = PROVIDER_MODELS[activeProvider] || [];
+        setIsManualModel(Boolean(resolvedModel && !knownModels.includes(resolvedModel)));
       });
       setIsSaved(false);
     }
@@ -227,26 +212,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     return PROVIDER_MODELS[provider] || [];
   }, [provider]);
 
-  // Build items array for shadcn Select with fallback for existing custom values
   const modelSelectItems = useMemo(() => {
-    const isKnown = rawModelList.some((m) => m.id === modelName);
-    const list = rawModelList.map((m) => ({
-      value: m.id,
-      label: `${m.label} (${m.badge})`,
-      displayId: m.id,
-      badge: m.badge,
+    return rawModelList.map((id) => ({
+      value: id,
+      label: id,
     }));
-
-    if (!isKnown && modelName) {
-      list.unshift({
-        value: modelName,
-        label: modelName,
-        displayId: modelName,
-        badge: 'Custom',
-      });
-    }
-    return list;
-  }, [rawModelList, modelName]);
+  }, [rawModelList]);
 
   if (!isOpen) return null;
 
@@ -254,9 +225,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setProvider(p);
     const cfg = PROVIDER_OPTIONS.find((opt) => opt.value === p);
     const modelsForNewProvider = PROVIDER_MODELS[p] || [];
-    const isCurrentModelValid = modelsForNewProvider.some((m) => m.id === modelName);
+    const isCurrentModelValid = modelsForNewProvider.includes(modelName);
     if (!isCurrentModelValid) {
-      setModelName(cfg?.defaultModel || modelsForNewProvider[0]?.id || '');
+      setModelName(cfg?.defaultModel || modelsForNewProvider[0] || '');
+      setIsManualModel(false);
     }
   };
 
@@ -438,41 +410,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
-        {/* 4. Model Selection (shadcn Select dropdown with Vercel AI SDK curated models) */}
+        {/* 4. Model Selection (Curated dropdown or Manual entry) */}
         <div className="space-y-1">
           <div className="flex items-center justify-between">
             <label className="text-muted-foreground flex items-center gap-1 text-[10.5px] font-medium">
               <Sparkles className="h-3 w-3 fill-amber-500/20 text-amber-500" />
               <span>{t('modelLabel')}</span>
             </label>
-            <span className="text-muted-foreground font-mono text-[9.5px]">
-              {rawModelList.length} models
-            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (isManualModel) {
+                  setIsManualModel(false);
+                  if (!rawModelList.includes(modelName)) {
+                    setModelName(currentProviderConfig.defaultModel || rawModelList[0] || '');
+                  }
+                } else {
+                  setIsManualModel(true);
+                }
+              }}
+              className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-[9.5px] transition-colors"
+            >
+              {isManualModel ? (
+                <>
+                  <List className="h-2.5 w-2.5" />
+                  <span>{lang === 'tr' ? 'Liste' : 'Presets'}</span>
+                </>
+              ) : (
+                <>
+                  <Pencil className="h-2.5 w-2.5" />
+                  <span>{lang === 'tr' ? 'Manuel' : 'Custom'}</span>
+                </>
+              )}
+            </button>
           </div>
 
-          <Select
-            items={modelSelectItems}
-            value={modelName}
-            onValueChange={(val) => {
-              if (val) setModelName(val);
-            }}
-          >
-            <SelectTrigger className="bg-muted/20 border-border/70 hover:bg-muted/30 h-8 w-full cursor-pointer font-mono text-xs focus-visible:ring-1">
-              <SelectValue placeholder="Select model..." />
-            </SelectTrigger>
-            <SelectContent className="max-h-60">
-              {modelSelectItems.map((m) => (
-                <SelectItem key={m.value} value={m.value}>
-                  <div className="flex w-full items-center justify-between gap-2">
-                    <span className="font-mono text-[11px] font-medium">{m.displayId}</span>
-                    <span className="text-muted-foreground truncate font-sans text-[9.5px]">
-                      {m.badge}
-                    </span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {isManualModel ? (
+            <Input
+              type="text"
+              value={modelName}
+              onChange={(e) => setModelName(e.target.value)}
+              placeholder={currentProviderConfig.defaultModel}
+              className="h-8 font-mono text-[11px]"
+            />
+          ) : (
+            <Select
+              items={modelSelectItems}
+              value={modelName}
+              onValueChange={(val) => {
+                if (val) setModelName(val);
+              }}
+            >
+              <SelectTrigger className="bg-muted/20 border-border/70 hover:bg-muted/30 h-8 w-full cursor-pointer font-mono text-xs focus-visible:ring-1">
+                <SelectValue placeholder="Select model..." />
+              </SelectTrigger>
+              <SelectContent className="max-h-60">
+                {modelSelectItems.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    <span className="font-mono text-[11px] font-medium">{m.value}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         {/* 5. Dark Mode Switch (shadcn Switch) */}
