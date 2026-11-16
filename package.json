@@ -2,7 +2,7 @@
   "name": "bookmark-otter",
   "version": "1.0.0",
   "private": true,
-  "description": "Smart, AI-powered bookmark manager & health suite for Google Chrome",
+  "description": "Private side panel bookmark manager & AI organizer: smart folders, deduplication, broken link checker & UTM cleaner",
   "license": "MIT",
   "type": "module",
   "scripts": {
