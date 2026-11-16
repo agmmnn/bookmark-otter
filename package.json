@@ -2,7 +2,7 @@
   "name": "bookmark-otter",
   "version": "1.0.0",
   "private": true,
-  "description": "Private side panel bookmark manager & AI organizer: smart folders, deduplication, broken link checker & UTM cleaner",
+  "description": "AI bookmark manager for your side panel: organize folders, remove duplicates, find dead links, clean tracking URLs.",
   "license": "MIT",
   "type": "module",
   "scripts": {
