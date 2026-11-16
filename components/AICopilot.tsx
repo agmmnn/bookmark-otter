@@ -14,12 +14,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/lib/i18n';
-import {
-  runMultiStepAgentHarness,
-  shouldUseAgentHarness,
-  type AgentProgress,
-} from '@/services/agentHarness';
-import { generateReorganizationPlan } from '@/services/ai';
+import { generatePlanViaBackground, shouldUseAgentHarness } from '@/services/aiClient';
 import {
   getBookmarkTree,
   getSmartTreeDSL,
@@ -28,7 +23,7 @@ import {
   executePlan,
 } from '@/services/bookmarks';
 import { getSettings, hasConfiguredKey } from '@/services/storage';
-import type { FlatBookmark, FlatFolder, ReorgAction, ReorgPlan } from '@/types';
+import type { AgentProgress, FlatBookmark, FlatFolder, ReorgAction, ReorgPlan } from '@/types';
 
 import { DiffPreview } from './DiffPreview';
 import { MentionMenu, type MentionItem } from './MentionMenu';
@@ -252,8 +247,6 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
 
       // 2. Select execution mode: Multi-Step Agent Harness (for global library) or Scoped Single-Shot
       const useHarness = shouldUseAgentHarness(userPrompt, flats.length, smartDsl.scopeType);
-      let plan: ReorgPlan;
-
       if (useHarness) {
         setAgentProgress({
           phase: 'architect',
@@ -263,19 +256,15 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
               : 'Architect: Analyzing library structure and designing taxonomy...',
           percentage: 10,
         });
-
-        plan = await runMultiStepAgentHarness({
-          userPrompt,
-          tree,
-          onProgress: (p) => setAgentProgress(p),
-        });
-      } else {
-        plan = await generateReorganizationPlan({
-          userPrompt,
-          compactTreeDSL: smartDsl.dsl,
-          tree,
-        });
       }
+
+      const plan = await generatePlanViaBackground({
+        userPrompt,
+        tree,
+        compactTreeDSL: smartDsl.dsl,
+        useHarness,
+        onProgress: useHarness ? (p) => setAgentProgress(p) : undefined,
+      });
 
       setCurrentPlan(plan);
     } catch (err: any) {

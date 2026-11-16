@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
-import { suggestForNewBookmark } from '@/services/ai';
+import { suggestForNewBookmarkViaBackground } from '@/services/aiClient';
 import { getRecentBookmarks, getBookmarkTree, getAllFolders } from '@/services/bookmarks';
 import type { FlatBookmark, PendingSuggestion } from '@/types';
 
@@ -95,7 +95,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
       const tree = await getBookmarkTree();
       const folders = getAllFolders(tree);
 
-      const suggestion = await suggestForNewBookmark({
+      const suggestion = await suggestForNewBookmarkViaBackground({
         bookmarkId: item.id,
         originalTitle: item.title,
         url: item.url,

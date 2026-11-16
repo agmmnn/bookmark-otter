@@ -256,3 +256,11 @@ export interface InsightsData {
     over3Years: { count: number; percentage: number };
   };
 }
+
+export interface AgentProgress {
+  phase: 'architect' | 'routing' | 'synthesizing' | 'done';
+  message: string;
+  current?: number;
+  total?: number;
+  percentage?: number;
+}

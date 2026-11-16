@@ -1,6 +1,8 @@
 import { browser } from 'wxt/browser';
 
-import { suggestForNewBookmark } from '@/services/ai';
+import { runMultiStepAgentHarness } from '@/services/agentHarness';
+import { generateReorganizationPlan, suggestForNewBookmark } from '@/services/ai';
+import type { GeneratePlanRequest, SuggestBookmarkRequest } from '@/services/aiClient';
 import { getBookmarkTree, getAllFolders } from '@/services/bookmarks';
 import {
   getSettings,
@@ -162,5 +164,61 @@ export default defineBackground(() => {
     } catch (err) {
       console.warn('Could not record bookmark deletion into Recycle Bin:', err);
     }
+  });
+
+  // 3. Handle on-demand single-bookmark AI suggestion requests from Sidepanel
+  browser.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
+    if (!message || message.type !== 'AI_SUGGEST_BOOKMARK') return false;
+
+    const payload = message.payload as SuggestBookmarkRequest;
+    suggestForNewBookmark(payload)
+      .then((suggestion) => sendResponse({ ok: true, suggestion }))
+      .catch((err: any) =>
+        sendResponse({ ok: false, error: err?.message || 'Could not generate suggestion.' })
+      );
+
+    return true;
+  });
+
+  // 4. Handle long-running Copilot reorganization plans over Port with streaming progress
+  browser.runtime.onConnect.addListener((port) => {
+    if (port.name !== 'ai-copilot-plan') return;
+
+    let isDisconnected = false;
+    port.onDisconnect.addListener(() => {
+      isDisconnected = true;
+    });
+
+    const safePost = (msg: any) => {
+      if (isDisconnected) return;
+      try {
+        port.postMessage(msg);
+      } catch {
+        isDisconnected = true;
+      }
+    };
+
+    port.onMessage.addListener(async (msg: any) => {
+      if (!msg || msg.type !== 'START_PLAN') return;
+      const payload = msg.payload as GeneratePlanRequest;
+
+      try {
+        const plan = payload.useHarness
+          ? await runMultiStepAgentHarness({
+              userPrompt: payload.userPrompt,
+              tree: payload.tree,
+              onProgress: (progress) => safePost({ type: 'PROGRESS', progress }),
+            })
+          : await generateReorganizationPlan({
+              userPrompt: payload.userPrompt,
+              compactTreeDSL: payload.compactTreeDSL,
+              tree: payload.tree,
+            });
+
+        safePost({ type: 'RESULT', plan });
+      } catch (err: any) {
+        safePost({ type: 'ERROR', error: err?.message || 'Plan generation failed.' });
+      }
+    });
   });
 });

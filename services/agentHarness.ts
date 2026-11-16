@@ -1,19 +1,19 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 
-import type { BookmarkTreeNode, FlatBookmark, ReorgAction, ReorgPlan } from '@/types';
+import type {
+  AgentProgress,
+  BookmarkTreeNode,
+  FlatBookmark,
+  ReorgAction,
+  ReorgPlan,
+} from '@/types';
 
 import { getLanguageModel } from './ai';
 import { flattenBookmarks, getAllFolders, hydrateReorgPlan } from './bookmarks';
 import { getSettings } from './storage';
 
-export interface AgentProgress {
-  phase: 'architect' | 'routing' | 'synthesizing' | 'done';
-  message: string;
-  current?: number;
-  total?: number;
-  percentage?: number;
-}
+export type { AgentProgress };
 
 export interface AgentHarnessParams {
   userPrompt: string;
