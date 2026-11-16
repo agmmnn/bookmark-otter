@@ -1,9 +1,12 @@
 import { generateObject } from 'ai';
+import { browser } from 'wxt/browser';
 import { z } from 'zod';
 
 import type {
+  AgentCheckpoint,
   AgentProgress,
   BookmarkTreeNode,
+  CopilotScopePreset,
   FlatBookmark,
   ReorgAction,
   ReorgPlan,
@@ -15,9 +18,42 @@ import { getSettings } from './storage';
 
 export type { AgentProgress };
 
+const HARNESS_CHECKPOINT_KEY = 'agentHarnessCheckpoint';
+
+async function loadHarnessCheckpoint(): Promise<AgentCheckpoint | null> {
+  if (typeof browser === 'undefined' || !browser.storage?.local) return null;
+  try {
+    const data = await browser.storage.local.get(HARNESS_CHECKPOINT_KEY);
+    return (data[HARNESS_CHECKPOINT_KEY] as AgentCheckpoint) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveHarnessCheckpoint(checkpoint: AgentCheckpoint): Promise<void> {
+  if (typeof browser === 'undefined' || !browser.storage?.local) return;
+  try {
+    await browser.storage.local.set({ [HARNESS_CHECKPOINT_KEY]: checkpoint });
+  } catch {
+    // Ignore quota/storage errors on checkpoint write
+  }
+}
+
+export async function clearHarnessCheckpoint(): Promise<void> {
+  if (typeof browser === 'undefined' || !browser.storage?.local) return;
+  try {
+    await browser.storage.local.remove(HARNESS_CHECKPOINT_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
 export interface AgentHarnessParams {
   userPrompt: string;
   tree: BookmarkTreeNode[];
+  scopePreset?: CopilotScopePreset;
+  maxBookmarks?: number;
+  resumeFromCheckpoint?: boolean;
   onProgress?: (progress: AgentProgress) => void;
 }
 
@@ -85,7 +121,7 @@ function chunkArray<T>(items: T[], size: number): T[][] {
  * - Phase 3: Plan Aggregator & Local Hydrator (Full local metadata resolution)
  */
 export async function runMultiStepAgentHarness(params: AgentHarnessParams): Promise<ReorgPlan> {
-  const { userPrompt, tree, onProgress } = params;
+  const { userPrompt, tree, maxBookmarks, resumeFromCheckpoint, onProgress } = params;
   const settings = await getSettings();
   const isTr = settings.language === 'tr';
   const targetLang =
@@ -99,60 +135,83 @@ export async function runMultiStepAgentHarness(params: AgentHarnessParams): Prom
   const folders = getAllFolders(tree);
   const totalCount = bookmarks.length;
 
-  // -------------------------------------------------------------
-  // PHASE 1: TAXONOMY ARCHITECT (Blueprint Generation)
-  // -------------------------------------------------------------
-  onProgress?.({
-    phase: 'architect',
-    message: isTr
-      ? 'Mimar: Kütüphane genel yapısı ve domain dağılımı analiz ediliyor...'
-      : 'Architect: Analyzing library structure and domain frequencies...',
-    percentage: 10,
-  });
-
-  const barBookmarks = bookmarks.filter((b) => b.parentId === '1');
-  const barBookmarkLines = barBookmarks.slice(0, 50).map((b) => {
-    const titleLabel =
-      b.title && b.title.trim().length > 0 ? `"${b.title}"` : '(icon-only favicon pin)';
-    return `- ID: "${b.id}" | Title: ${titleLabel} | Domain: ${b.domain || 'N/A'}`;
-  });
-
-  // Compute domain frequencies
-  const domainMap = new Map<string, { count: number; sampleFolders: Set<string> }>();
-  for (const b of bookmarks) {
-    if (!b.domain) continue;
-    const entry = domainMap.get(b.domain) || { count: 0, sampleFolders: new Set() };
-    entry.count++;
-    entry.sampleFolders.add(b.path.split('/').pop() || b.path);
-    domainMap.set(b.domain, entry);
-  }
-
-  const sortedDomains = Array.from(domainMap.entries())
-    .filter(([, data]) => data.count >= 2)
-    .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, 35);
-
-  const domainFrequencyLines = sortedDomains.map(
-    ([domain, data]) =>
-      `- ${domain} (${data.count} items) -> Existing: [${Array.from(data.sampleFolders).slice(0, 3).join(', ')}]`
-  );
-
-  const nonRootFolders = folders.filter((f) => f.id !== '0' && f.id !== '1' && f.id !== '2');
-  const sortedFoldersForOverview = [...nonRootFolders].sort((a, b) => {
-    // Top-level bar folders first
-    if (a.parentId === '1' && b.parentId !== '1') return -1;
-    if (b.parentId === '1' && a.parentId !== '1') return 1;
-    return 0;
-  });
-
-  const folderOverviewLines = sortedFoldersForOverview.slice(0, 50).map((f) => {
-    const count = bookmarks.filter((b) => b.parentId === f.id).length;
-    return `${f.id}|${f.parentId || '1'}|${f.path} (${count} items)`;
-  });
-
   const model = await getLanguageModel();
 
-  const architectSystem = `You are "Bookmark Otter Architecture Agent", a world-class, multilingual information architect.
+  const existingCheckpoint = resumeFromCheckpoint ? await loadHarnessCheckpoint() : null;
+  const canResumeCheckpoint = Boolean(
+    existingCheckpoint &&
+    existingCheckpoint.userPrompt === userPrompt &&
+    existingCheckpoint.blueprint?.categories?.length > 0
+  );
+
+  let blueprint: AgentCheckpoint['blueprint'];
+
+  if (canResumeCheckpoint && existingCheckpoint) {
+    blueprint = existingCheckpoint.blueprint;
+    onProgress?.({
+      phase: 'routing',
+      message: isTr
+        ? `Kaldığı yerden devam ediliyor (${existingCheckpoint.completedCount}/${existingCheckpoint.totalCount})...`
+        : `Resuming from checkpoint (${existingCheckpoint.completedCount}/${existingCheckpoint.totalCount})...`,
+      current: existingCheckpoint.completedCount,
+      total: existingCheckpoint.totalCount,
+      percentage: 35,
+    });
+  } else {
+    await clearHarnessCheckpoint();
+
+    // -------------------------------------------------------------
+    // PHASE 1: TAXONOMY ARCHITECT (Blueprint Generation)
+    // -------------------------------------------------------------
+    onProgress?.({
+      phase: 'architect',
+      message: isTr
+        ? 'Mimar: Kütüphane genel yapısı ve domain dağılımı analiz ediliyor...'
+        : 'Architect: Analyzing library structure and domain frequencies...',
+      percentage: 10,
+    });
+
+    const barBookmarks = bookmarks.filter((b) => b.parentId === '1');
+    const barBookmarkLines = barBookmarks.slice(0, 50).map((b) => {
+      const titleLabel =
+        b.title && b.title.trim().length > 0 ? `"${b.title}"` : '(icon-only favicon pin)';
+      return `- ID: "${b.id}" | Title: ${titleLabel} | Domain: ${b.domain || 'N/A'}`;
+    });
+
+    // Compute domain frequencies
+    const domainMap = new Map<string, { count: number; sampleFolders: Set<string> }>();
+    for (const b of bookmarks) {
+      if (!b.domain) continue;
+      const entry = domainMap.get(b.domain) || { count: 0, sampleFolders: new Set() };
+      entry.count++;
+      entry.sampleFolders.add(b.path.split('/').pop() || b.path);
+      domainMap.set(b.domain, entry);
+    }
+
+    const sortedDomains = Array.from(domainMap.entries())
+      .filter(([, data]) => data.count >= 2)
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 35);
+
+    const domainFrequencyLines = sortedDomains.map(
+      ([domain, data]) =>
+        `- ${domain} (${data.count} items) -> Existing: [${Array.from(data.sampleFolders).slice(0, 3).join(', ')}]`
+    );
+
+    const nonRootFolders = folders.filter((f) => f.id !== '0' && f.id !== '1' && f.id !== '2');
+    const sortedFoldersForOverview = [...nonRootFolders].sort((a, b) => {
+      // Top-level bar folders first
+      if (a.parentId === '1' && b.parentId !== '1') return -1;
+      if (b.parentId === '1' && a.parentId !== '1') return 1;
+      return 0;
+    });
+
+    const folderOverviewLines = sortedFoldersForOverview.slice(0, 50).map((f) => {
+      const count = bookmarks.filter((b) => b.parentId === f.id).length;
+      return `${f.id}|${f.parentId || '1'}|${f.path} (${count} items)`;
+    });
+
+    const architectSystem = `You are "Bookmark Otter Architecture Agent", a world-class, multilingual information architect.
 Your job is to design a clean, cohesive, top-level Taxonomy Blueprint for the user's bookmarks library.
 
 [GOAL]
@@ -202,7 +261,7 @@ Organize the entire bookmark collection into 5-8 master categories on the Bookma
    - Respect any explicit user constraints (e.g. "don't touch X").
    - Output summary in ${targetLang}.`;
 
-  const architectPrompt = `[USER REQUEST]
+    const architectPrompt = `[USER REQUEST]
 "${userPrompt}"
 
 [LIBRARY STATS]
@@ -219,48 +278,53 @@ ${domainFrequencyLines.join('\n')}
 [EXISTING FOLDERS (id | parentId | path | count)]
 ${folderOverviewLines.join('\n')}`;
 
-  const CategorySchema = z.object({
-    id: z
-      .string()
-      .describe('Existing folder ID if reusing, or unique temp ID like "tmp_cat_dev" if new'),
-    title: z.string().describe('Category title with 1 emoji'),
-    parentId: z.string().default('1').describe('Parent folder ID (usually "1" for Bookmarks Bar)'),
-    isNew: z
-      .boolean()
-      .describe('True if creating a new folder, false if reusing an existing folder'),
-    targetDomains: z.array(z.string()).describe('Domains associated with this category'),
-    keywords: z.array(z.string()).describe('Keywords in titles associated with this category'),
-    reason: z.string().describe('Short explanation for this category'),
-  });
+    const CategorySchema = z.object({
+      id: z
+        .string()
+        .describe('Existing folder ID if reusing, or unique temp ID like "tmp_cat_dev" if new'),
+      title: z.string().describe('Category title with 1 emoji'),
+      parentId: z
+        .string()
+        .default('1')
+        .describe('Parent folder ID (usually "1" for Bookmarks Bar)'),
+      isNew: z
+        .boolean()
+        .describe('True if creating a new folder, false if reusing an existing folder'),
+      targetDomains: z.array(z.string()).describe('Domains associated with this category'),
+      keywords: z.array(z.string()).describe('Keywords in titles associated with this category'),
+      reason: z.string().describe('Short explanation for this category'),
+    });
 
-  const BlueprintSchema = z.object({
-    categories: z
-      .array(CategorySchema)
-      .describe('6-10 master categories covering the entire library'),
-    dumpFolderIdsToDismantle: z
-      .array(z.string())
-      .describe(
-        'IDs of generic catch-all, dump, or temporary holding folders in any language to dismantle and remove'
-      ),
-    preservedFolderIds: z
-      .array(z.string())
-      .optional()
-      .describe('IDs of cohesive existing folders to preserve as-is'),
-    pinnedBarBookmarkIdsToKeep: z
-      .array(z.string())
-      .optional()
-      .describe(
-        'IDs of intentional quick-access launchpad bookmarks on Bookmarks Bar that should remain pinned on the bar'
-      ),
-    summary: z.string().describe('High-level architectural summary of the reorganization plan'),
-  });
+    const BlueprintSchema = z.object({
+      categories: z
+        .array(CategorySchema)
+        .describe('6-10 master categories covering the entire library'),
+      dumpFolderIdsToDismantle: z
+        .array(z.string())
+        .describe(
+          'IDs of generic catch-all, dump, or temporary holding folders in any language to dismantle and remove'
+        ),
+      preservedFolderIds: z
+        .array(z.string())
+        .optional()
+        .describe('IDs of cohesive existing folders to preserve as-is'),
+      pinnedBarBookmarkIdsToKeep: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'IDs of intentional quick-access launchpad bookmarks on Bookmarks Bar that should remain pinned on the bar'
+        ),
+      summary: z.string().describe('High-level architectural summary of the reorganization plan'),
+    });
 
-  const { object: blueprint } = await generateObject({
-    model,
-    schema: BlueprintSchema,
-    system: architectSystem,
-    prompt: architectPrompt,
-  });
+    const { object } = await generateObject({
+      model,
+      schema: BlueprintSchema,
+      system: architectSystem,
+      prompt: architectPrompt,
+    });
+    blueprint = object;
+  }
 
   // -------------------------------------------------------------
   // PHASE 2: HYBRID BATCH ROUTER (Local Fast-Path + LLM Chunks)
@@ -372,15 +436,21 @@ ${folderOverviewLines.join('\n')}`;
     }
   }
 
+  // Apply optional maxBookmarks sample cap (e.g. "Try 50 links first")
+  const effectiveCandidates =
+    maxBookmarks && maxBookmarks > 0 ? candidatesToRoute.slice(0, maxBookmarks) : candidatesToRoute;
+
   // Routing destination map: bookmarkId -> { targetFolderId, reason }
   const routedDestinations = new Map<
     string,
     { targetFolderId: string; targetFolderTitle: string; reason: string }
-  >();
+  >(canResumeCheckpoint && existingCheckpoint ? existingCheckpoint.routedEntries : []);
   const ambiguousBookmarks: FlatBookmark[] = [];
 
-  // Step 2A: Instant Local Fast-Path Matching
-  for (const b of candidatesToRoute) {
+  // Step 2A: Instant Local Fast-Path Matching (skip items already restored from checkpoint)
+  for (const b of effectiveCandidates) {
+    if (routedDestinations.has(b.id)) continue;
+
     let matchedCategory = categories.find((cat) => matchesDomain(b.domain, cat.targetDomains));
 
     if (!matchedCategory) {
@@ -401,11 +471,22 @@ ${folderOverviewLines.join('\n')}`;
     }
   }
 
-  // Step 2B: LLM Chunked Classification for Ambiguous Bookmarks
+  // Step 2B: LLM Chunked Classification for Ambiguous Bookmarks (with durable chunk checkpoints)
   if (ambiguousBookmarks.length > 0) {
     const CHUNK_SIZE = 40;
     const chunks = chunkArray(ambiguousBookmarks, CHUNK_SIZE);
+    const totalToRoute = routedDestinations.size + ambiguousBookmarks.length;
     let processedChunks = 0;
+
+    // Persist initial fast-path checkpoint before chunk requests begin
+    await saveHarnessCheckpoint({
+      userPrompt,
+      blueprint,
+      routedEntries: Array.from(routedDestinations.entries()),
+      completedCount: routedDestinations.size,
+      totalCount: totalToRoute,
+      savedAt: Date.now(),
+    });
 
     const categoryChoices = categories
       .map(
@@ -426,16 +507,19 @@ ${folderOverviewLines.join('\n')}`;
 
     for (const chunk of chunks) {
       processedChunks++;
-      const currentProcessed = routedDestinations.size + (processedChunks - 1) * CHUNK_SIZE;
-      const progressPercent = Math.min(85, Math.round(35 + (50 * processedChunks) / chunks.length));
+      const currentProcessed = Math.min(totalToRoute, routedDestinations.size);
+      const progressPercent = Math.min(
+        85,
+        Math.round(35 + (50 * (processedChunks - 1)) / chunks.length)
+      );
 
       onProgress?.({
         phase: 'routing',
         message: isTr
-          ? `Yönlendirici: Belirsiz linkler sınıflandırılıyor (${currentProcessed} / ${candidatesToRoute.length})...`
-          : `Router: Classifying remaining links (${currentProcessed} / ${candidatesToRoute.length})...`,
+          ? `Yönlendirici: Belirsiz linkler sınıflandırılıyor (${currentProcessed} / ${totalToRoute})...`
+          : `Router: Classifying remaining links (${currentProcessed} / ${totalToRoute})...`,
         current: currentProcessed,
-        total: candidatesToRoute.length,
+        total: totalToRoute,
         percentage: progressPercent,
       });
 
@@ -472,19 +556,33 @@ ${batchItems}`;
             });
           }
         }
-      } catch (chunkErr) {
-        console.warn('Batch routing chunk failed, falling back to default category:', chunkErr);
-        // Fallback: assign to first category
-        const fallbackCat = categories[0];
-        if (fallbackCat) {
-          for (const item of chunk) {
-            routedDestinations.set(item.id, {
-              targetFolderId: fallbackCat.id,
-              targetFolderTitle: fallbackCat.title,
-              reason: fallbackCat.title,
-            });
-          }
+
+        // Save durable progress checkpoint after every completed chunk
+        await saveHarnessCheckpoint({
+          userPrompt,
+          blueprint,
+          routedEntries: Array.from(routedDestinations.entries()),
+          completedCount: routedDestinations.size,
+          totalCount: totalToRoute,
+          savedAt: Date.now(),
+        });
+      } catch (chunkErr: any) {
+        // Persist completed routes so user can resume cleanly from the failed chunk
+        await saveHarnessCheckpoint({
+          userPrompt,
+          blueprint,
+          routedEntries: Array.from(routedDestinations.entries()),
+          completedCount: routedDestinations.size,
+          totalCount: totalToRoute,
+          savedAt: Date.now(),
+        });
+        if (chunkErr && typeof chunkErr === 'object') {
+          chunkErr.checkpoint = {
+            completed: routedDestinations.size,
+            total: totalToRoute,
+          };
         }
+        throw chunkErr;
       }
     }
   }
@@ -617,6 +715,7 @@ ${batchItems}`;
 
   // Full 100% Local Hydration (titles, domains, paths, icons)
   const hydratedPlan = hydrateReorgPlan(rawPlan, tree);
+  await clearHarnessCheckpoint();
 
   onProgress?.({
     phase: 'done',

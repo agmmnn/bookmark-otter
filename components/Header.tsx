@@ -51,18 +51,18 @@ export const Header: React.FC<HeaderProps> = ({
             className={cn(
               'relative flex h-6 cursor-pointer items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium transition-all duration-150 select-none active:scale-[0.97]',
               isTrashOpen
-                ? 'border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                ? 'border-border bg-muted text-foreground'
                 : 'border-border/60 bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'
             )}
           >
-            <Trash2 className={cn('size-3', isTrashOpen && 'text-rose-500')} />
+            <Trash2 className="size-3" />
             {trashCount > 0 && (
               <span
                 className={cn(
                   'rounded-full px-1 py-0 text-[9px] leading-tight font-semibold',
                   isTrashOpen
-                    ? 'bg-rose-500 text-white'
-                    : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                    ? 'bg-foreground/15 text-foreground'
+                    : 'bg-muted-foreground/15 text-muted-foreground'
                 )}
               >
                 {trashCount > 99 ? '99+' : trashCount}

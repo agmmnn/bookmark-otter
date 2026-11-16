@@ -4,6 +4,7 @@ import type {
   AgentProgress,
   AIProvider,
   BookmarkTreeNode,
+  CopilotScopePreset,
   FlatFolder,
   PendingSuggestion,
   ReorgPlan,
@@ -22,12 +23,15 @@ export interface GeneratePlanRequest {
   tree: BookmarkTreeNode[];
   compactTreeDSL: string;
   useHarness: boolean;
+  scopePreset?: CopilotScopePreset;
+  maxBookmarks?: number;
+  resumeFromCheckpoint?: boolean;
 }
 
 export type AiPortMessage =
   | { type: 'PROGRESS'; progress: AgentProgress }
   | { type: 'RESULT'; plan: ReorgPlan }
-  | { type: 'ERROR'; error: string };
+  | { type: 'ERROR'; error: string; checkpoint?: { completed: number; total: number } };
 
 /**
  * Determines whether the user's request should trigger the full Multi-Step Agent Harness
@@ -153,7 +157,13 @@ export function generatePlanViaBackground(
         if (settled) return;
         settled = true;
         cleanup();
-        reject(new Error(msg.error || 'Plan generation failed.'));
+        const err = new Error(msg.error || 'Plan generation failed.') as Error & {
+          checkpoint?: { completed: number; total: number };
+        };
+        if (msg.checkpoint) {
+          err.checkpoint = msg.checkpoint;
+        }
+        reject(err);
       }
     });
 

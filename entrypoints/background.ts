@@ -237,6 +237,9 @@ export default defineBackground(() => {
           ? await runMultiStepAgentHarness({
               userPrompt: payload.userPrompt,
               tree: payload.tree,
+              scopePreset: payload.scopePreset,
+              maxBookmarks: payload.maxBookmarks,
+              resumeFromCheckpoint: payload.resumeFromCheckpoint,
               onProgress: (progress) => safePost({ type: 'PROGRESS', progress }),
             })
           : await generateReorganizationPlan({
@@ -247,7 +250,11 @@ export default defineBackground(() => {
 
         safePost({ type: 'RESULT', plan });
       } catch (err: any) {
-        safePost({ type: 'ERROR', error: err?.message || 'Plan generation failed.' });
+        safePost({
+          type: 'ERROR',
+          error: err?.message || 'Plan generation failed.',
+          checkpoint: err?.checkpoint,
+        });
       }
     });
   });

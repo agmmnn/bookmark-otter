@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 
 import type {
+  CopilotScopePreset,
   FlatBookmark,
   FlatFolder,
   ReorgAction,
@@ -167,7 +168,12 @@ export interface SmartTreeDSLResult {
  * Smart Tree DSL Generator with @mention scoping (folders & bookmarks), domain pre-clustering,
  * and delta/loose item prioritization for large bookmark libraries.
  */
-export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): SmartTreeDSLResult {
+export function getSmartTreeDSL(
+  nodes: BookmarkTreeNode[],
+  userPrompt = '',
+  options: { scopePreset?: CopilotScopePreset; maxBookmarks?: number } = {}
+): SmartTreeDSLResult {
+  const { scopePreset = 'library', maxBookmarks } = options;
   const folders = getAllFolders(nodes);
   const bookmarks = flattenBookmarks(nodes);
   const mentions = extractMentions(userPrompt);
@@ -244,11 +250,14 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
     const targetBookmarks = Array.from(combinedTargetMap.values());
 
+    const scopedTargetBookmarks =
+      maxBookmarks && maxBookmarks > 0 ? targetBookmarks.slice(0, maxBookmarks) : targetBookmarks;
+
     const folderLines = folders
       .filter((f) => f.id !== '0')
       .map((f) => `${f.id}|${f.parentId || '0'}|${f.path}`);
 
-    const targetBookmarkLines = targetBookmarks.map((b) => {
+    const targetBookmarkLines = scopedTargetBookmarks.map((b) => {
       const safeTitle = (b.title || 'Untitled').replace(/\|/g, '-').slice(0, 60);
       const safePath = (b.path || 'Bookmarks Bar').replace(/\|/g, '-').slice(0, 45);
       return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
@@ -271,7 +280,7 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
     const dsl = [
       `# TARGET DIRECTIVE: The user explicitly targeted ${targetSummaryParts.join(' and ')}.`,
       `# USER GOAL: Operate strictly on the targeted item(s)/folder(s) below. Do NOT reorganize, move, or remove unrelated bookmarks elsewhere in the library.`,
-      `# TOTAL TARGET BOOKMARKS IN SCOPE: ${targetBookmarks.length}`,
+      `# TOTAL TARGET BOOKMARKS IN SCOPE: ${scopedTargetBookmarks.length}`,
       '',
       '# EXISTING FOLDER PATHS FOR REFERENCE (id|parentId|path)',
       ...folderLines,
@@ -287,7 +296,7 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
     return {
       dsl,
-      analyzedCount: targetBookmarks.length,
+      analyzedCount: scopedTargetBookmarks.length,
       scopeType: 'targeted',
       targetFolderNames: targetLabels.slice(0, 4),
     };
@@ -317,8 +326,56 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
           .join(', ')}`
       : '';
 
-  // --- CASE B: LARGE REPOSITORY DOMAIN PRE-CLUSTERING (Bookmarks > 100) ---
-  if (bookmarks.length > 100) {
+  // --- CASE A2: EXPLICIT INBOX / LOOSE-ONLY SCOPE ---
+  if (scopePreset === 'inbox') {
+    const dumpFolderRegex =
+      /^(inbox|unsorted|other|needfix|temp|yeni|misc|çöp|cop|dump|imported|di[gğ]er)/i;
+    const inboxDumpIds = new Set(
+      folders
+        .filter((f) => dumpFolderRegex.test(f.title.trim()) && !protectedFolderIds.has(f.id))
+        .map((f) => f.id)
+    );
+    const inboxAll = bookmarks.filter(
+      (b) =>
+        b.url &&
+        !b.url.startsWith('chrome://') &&
+        !isInsideProtected(b) &&
+        (b.parentId === '1' || b.parentId === '2' || inboxDumpIds.has(b.parentId))
+    );
+    const inboxBookmarks =
+      maxBookmarks && maxBookmarks > 0 ? inboxAll.slice(0, maxBookmarks) : inboxAll;
+
+    const folderLines = folders
+      .filter((f) => f.id !== '0' && !protectedFolderIds.has(f.id))
+      .map((f) => `${f.id}|${f.parentId || '0'}|${f.path}`);
+
+    const bookmarkLines = inboxBookmarks.map((b) => {
+      const safeTitle = (b.title || 'Untitled').replace(/\|/g, '-').slice(0, 50);
+      const safePath = (b.path || 'Bookmarks Bar').replace(/\|/g, '-').slice(0, 40);
+      return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
+    });
+
+    const dsl = [
+      `# INBOX-ONLY DIRECTIVE: Organize ONLY the loose / unfiled / inbox bookmarks listed below into existing folders (or propose minimal new categories if none fit). Do NOT alter already-organized folders.`,
+      ...(protectedDirectiveLine ? [protectedDirectiveLine] : []),
+      '',
+      '# EXISTING FOLDERS (id|parentId|path)',
+      ...folderLines,
+      '',
+      `# INBOX BOOKMARKS IN SCOPE (${inboxBookmarks.length} items) (id|parentId|currentFolder|title|domain)`,
+      ...bookmarkLines,
+    ].join('\n');
+
+    return {
+      dsl,
+      analyzedCount: inboxBookmarks.length,
+      scopeType: 'targeted',
+      targetFolderNames: ['Inbox'],
+    };
+  }
+
+  // --- CASE B: LARGE REPOSITORY DOMAIN PRE-CLUSTERING (Bookmarks > 100 and not capped to <= 50 sample) ---
+  if (bookmarks.length > 100 && !(maxBookmarks && maxBookmarks <= 60)) {
     // 1. Identify Loose Bookmarks (Bookmarks Bar root '1' or Other Bookmarks root '2')
     const looseBookmarks = bookmarks.filter(
       (b) => (b.parentId === '1' || b.parentId === '2') && b.url && !b.url.startsWith('chrome://')
@@ -400,20 +457,29 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
     };
   }
 
-  // --- CASE C: FULL TREE DSL (Default for smaller collections <= 100 bookmarks) ---
+  // --- CASE C: FULL TREE OR TRIAL-SAMPLED DSL (<= 100 bookmarks or trial 50-link mode) ---
   const folderLines = folders
     .filter((f) => f.id !== '0' && !protectedFolderIds.has(f.id))
     .map((f) => `${f.id}|${f.parentId || '0'}|${f.path}`);
 
-  const bookmarkLines = bookmarks
-    .filter((b) => !isInsideProtected(b))
-    .map((b) => {
-      const safeTitle = (b.title || 'Untitled').replace(/\|/g, '-').slice(0, 50);
-      const safePath = (b.path || 'Bookmarks Bar').replace(/\|/g, '-').slice(0, 40);
-      return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
-    });
+  const candidateBookmarks = bookmarks.filter((b) => !isInsideProtected(b));
+  const slicedBookmarks =
+    maxBookmarks && maxBookmarks > 0
+      ? candidateBookmarks.slice(0, maxBookmarks)
+      : candidateBookmarks;
+
+  const bookmarkLines = slicedBookmarks.map((b) => {
+    const safeTitle = (b.title || 'Untitled').replace(/\|/g, '-').slice(0, 50);
+    const safePath = (b.path || 'Bookmarks Bar').replace(/\|/g, '-').slice(0, 40);
+    return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
+  });
 
   const dsl = [
+    ...(maxBookmarks && maxBookmarks > 0
+      ? [
+          `# TRIAL SAMPLE MODE: Organize only these first ${slicedBookmarks.length} bookmarks cleanly so the user can review a quick sample plan before doing the whole library.`,
+        ]
+      : []),
     ...(protectedDirectiveLine ? [protectedDirectiveLine, ''] : []),
     '# FOLDERS (id|parentId|path)',
     ...folderLines,
@@ -424,7 +490,7 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
   return {
     dsl,
-    analyzedCount: bookmarks.length,
+    analyzedCount: slicedBookmarks.length,
     scopeType: 'full',
   };
 }

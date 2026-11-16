@@ -279,10 +279,35 @@ export interface InsightsData {
   };
 }
 
+export type CopilotScopePreset = 'library' | 'inbox' | 'selected';
+
 export interface AgentProgress {
   phase: 'architect' | 'routing' | 'synthesizing' | 'done';
   message: string;
   current?: number;
   total?: number;
   percentage?: number;
+}
+
+export interface AgentCheckpoint {
+  userPrompt: string;
+  blueprint: {
+    categories: {
+      id: string;
+      title: string;
+      parentId: string;
+      isNew: boolean;
+      targetDomains: string[];
+      keywords: string[];
+      reason: string;
+    }[];
+    dumpFolderIdsToDismantle: string[];
+    preservedFolderIds?: string[];
+    pinnedBarBookmarkIdsToKeep?: string[];
+    summary: string;
+  };
+  routedEntries: [string, { targetFolderId: string; targetFolderTitle: string; reason: string }][];
+  completedCount: number;
+  totalCount: number;
+  savedAt: number;
 }

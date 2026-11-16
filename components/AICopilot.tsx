@@ -3,7 +3,7 @@ import {
   Loader2,
   Wand2,
   CheckCircle2,
-  AlertCircle,
+  AlertTriangle,
   Edit2,
   AtSign,
   Sparkles,
@@ -14,18 +14,39 @@ import {
   Search,
   X,
   Square,
+  ChevronDown,
+  ChevronRight,
+  Cpu,
+  Shield,
+  Check,
+  SlidersHorizontal,
 } from 'lucide-react';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
+import { browser } from 'wxt/browser';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { PROVIDER_MODELS, PROVIDER_OPTIONS, formatModelDisplayName } from '@/lib/aiConstants';
 import { useI18n } from '@/lib/i18n';
-import { METHODOLOGY_PRESETS } from '@/lib/methodologies';
+import {
+  buildCustomMethodologyPrompt,
+  CUSTOM_METHODOLOGY_ID,
+  METHODOLOGY_PRESETS,
+} from '@/lib/methodologies';
 import { formatFolderTitle, isEmojiOnlyTitle } from '@/lib/utils';
 import { generatePlanViaBackground, shouldUseAgentHarness } from '@/services/aiClient';
 import {
+  extractMentions,
   getBookmarkTree,
   getSmartTreeDSL,
   flattenBookmarks,
@@ -33,9 +54,18 @@ import {
   executePlan,
   restoreSnapshot,
 } from '@/services/bookmarks';
-import { getSettings, hasConfiguredKey, getSnapshots, popLatestSnapshot } from '@/services/storage';
+import {
+  getSettings,
+  saveSettings,
+  hasConfiguredKey,
+  getSnapshots,
+  popLatestSnapshot,
+} from '@/services/storage';
 import type {
+  AgentCheckpoint,
   AgentProgress,
+  AIProvider,
+  CopilotScopePreset,
   FlatBookmark,
   FlatFolder,
   ReorgAction,
@@ -52,6 +82,19 @@ interface AICopilotProps {
   onOpenSettings: () => void;
 }
 
+type CopilotErrorKind = 'quota' | 'auth' | 'network' | 'validation' | 'other';
+
+interface CopilotErrorState {
+  kind: CopilotErrorKind;
+  title: string;
+  description?: string;
+  rawMessage: string;
+  checkpoint?: { completed: number; total: number };
+}
+
+const CUSTOM_FOLDERS_STORAGE_KEY = 'custom_methodology_folders';
+const HARNESS_CHECKPOINT_KEY = 'agentHarnessCheckpoint';
+
 export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot({
   onPlanApplied,
   onOpenSettings,
@@ -60,18 +103,51 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   const [promptText, setPromptText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [agentProgress, setAgentProgress] = useState<AgentProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [errorState, setErrorState] = useState<CopilotErrorState | null>(null);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [savedCheckpoint, setSavedCheckpoint] = useState<AgentCheckpoint | null>(null);
+  const [lastSubmittedPrompt, setLastSubmittedPrompt] = useState<string>('');
+
+  // Provider & model quick switcher state
+  const [activeProvider, setActiveProvider] = useState<AIProvider>('google');
+  const [activeModelName, setActiveModelName] = useState<string>('gemini-3.8-flash');
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
+
   const [currentPlan, setCurrentPlan] = useState<ReorgPlan | null>(null);
   const [bookmarkMap, setBookmarkMap] = useState<Map<string, FlatBookmark>>(new Map());
   const [folderMap, setFolderMap] = useState<Map<string, FlatFolder>>(new Map());
   const [analyzedCount, setAnalyzedCount] = useState<number>(0);
   const [scopeType, setScopeType] = useState<'targeted' | 'clustered' | 'full'>('full');
   const [targetedNames, setTargetedNames] = useState<string[]>([]);
+
+  // Presets & Custom Methodology
   const [activeMethodologyId, setActiveMethodologyId] = useState<string | null>(null);
+  const [customFolders, setCustomFolders] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(CUSTOM_FOLDERS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return lang === 'tr'
+      ? ['İş', 'Projeler', 'Okuma', 'Araçlar']
+      : ['Work', 'Projects', 'Reading', 'Tools'];
+  });
   const [isMethodologiesOpen, setIsMethodologiesOpen] = useState(false);
+
+  // Scope & trial transparency before submit
+  const [scopePreset, setScopePreset] = useState<CopilotScopePreset>('library');
+  const [tryFirst50, setTryFirst50] = useState(false);
+
   const [showAllRecipes, setShowAllRecipes] = useState(false);
+
+  // Mention a folder (collapsed by default, search box always visible)
+  const [isMentionSectionOpen, setIsMentionSectionOpen] = useState(false);
+  const [mentionInsertMode, setMentionInsertMode] = useState<'target' | 'protect'>('target');
   const [folderSearchQuery, setFolderSearchQuery] = useState('');
   const [showAllMentionFolders, setShowAllMentionFolders] = useState(false);
+
   const [isApplying, setIsApplying] = useState(false);
   const [appliedSuccess, setAppliedSuccess] = useState<{
     count: number;
@@ -89,7 +165,22 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
 
-  // Load user's folders and bookmarks for @ mentions
+  const activeProviderConfig = useMemo(
+    () => PROVIDER_OPTIONS.find((p) => p.value === activeProvider) || PROVIDER_OPTIONS[0]!,
+    [activeProvider]
+  );
+
+  const loadSettingsState = async () => {
+    try {
+      const s = await getSettings();
+      setActiveProvider(s.aiProvider || 'google');
+      const fallbackModel =
+        PROVIDER_OPTIONS.find((p) => p.value === s.aiProvider)?.defaultModel || 'gemini-3.8-flash';
+      setActiveModelName(s.modelName || fallbackModel);
+    } catch {}
+  };
+
+  // Load user's folders, bookmarks, snapshots, settings & checkpoint
   const loadMentionTargets = async () => {
     try {
       const [tree, snaps] = await Promise.all([getBookmarkTree(), getSnapshots()]);
@@ -98,9 +189,114 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         flattenBookmarks(tree).filter((b) => b.url && !b.url.startsWith('chrome://'))
       );
       setRecentSnapshots(snaps);
+
+      if (typeof browser !== 'undefined' && browser.storage?.local) {
+        const cpData = await browser.storage.local.get(HARNESS_CHECKPOINT_KEY);
+        const cp = cpData[HARNESS_CHECKPOINT_KEY] as AgentCheckpoint | undefined;
+        setSavedCheckpoint(cp || null);
+      }
     } catch (err) {
       console.warn('Could not load mention targets:', err);
     }
+  };
+
+  useEffect(() => {
+    loadMentionTargets();
+    loadSettingsState();
+
+    const onStorageChange = (changes: Record<string, any>, areaName: string) => {
+      if (areaName === 'local' && changes.settings) {
+        loadSettingsState();
+      }
+    };
+    browser.storage?.onChanged?.addListener?.(onStorageChange);
+    return () => {
+      browser.storage?.onChanged?.removeListener?.(onStorageChange);
+    };
+  }, []);
+
+  const handleQuickModelSwitch = async (nextModel: string) => {
+    try {
+      await saveSettings({ modelName: nextModel });
+      setActiveModelName(nextModel);
+      setIsModelMenuOpen(false);
+      toast.success(
+        lang === 'tr'
+          ? `Model güncellendi: ${formatModelDisplayName(nextModel)}`
+          : `Switched model: ${formatModelDisplayName(nextModel)}`
+      );
+    } catch (err) {
+      console.error('Failed to switch model:', err);
+    }
+  };
+
+  const classifyCopilotError = (
+    rawMessage: string,
+    checkpoint?: { completed: number; total: number }
+  ): CopilotErrorState => {
+    const msg = rawMessage || 'Plan generation failed.';
+    const lower = msg.toLowerCase();
+
+    if (
+      /quota|rate.?limit|429|resource_exhausted|insufficient_quota|exceeded.*quota|billing/i.test(
+        lower
+      )
+    ) {
+      return {
+        kind: 'quota',
+        title:
+          lang === 'tr'
+            ? `${activeProviderConfig.shortLabel} kotan doldu`
+            : `${activeProviderConfig.shortLabel} quota exceeded`,
+        description:
+          lang === 'tr'
+            ? 'Kullanım sınırına ulaşıldı. Başka bir model seçebilir, sağlayıcı değiştirebilir veya birazdan tekrar deneyebilirsin.'
+            : 'API usage limit reached. Switch model, change provider, or retry shortly.',
+        rawMessage: msg,
+        checkpoint,
+      };
+    }
+
+    if (
+      /api.?key|invalid.*key|unauthorized|authentication|401|403|permission_denied|incorrect api key|ayarlar bölümünden api/i.test(
+        lower
+      )
+    ) {
+      return {
+        kind: 'auth',
+        title: lang === 'tr' ? 'API anahtarı geçersiz veya eksik' : 'Invalid or missing API key',
+        description:
+          lang === 'tr'
+            ? 'Seçili sağlayıcı için geçerli bir API anahtarı girin.'
+            : 'Please enter a valid API key for the selected provider.',
+        rawMessage: msg,
+        checkpoint,
+      };
+    }
+
+    if (
+      /network|timeout|timed out|failed to fetch|econn|offline|disconnected|502|503|504/i.test(
+        lower
+      )
+    ) {
+      return {
+        kind: 'network',
+        title: lang === 'tr' ? 'Bağlantı veya zaman aşımı hatası' : 'Network or timeout error',
+        description:
+          lang === 'tr'
+            ? 'Sunucuya ulaşılamadı veya yanıt zaman aşımına uğradı.'
+            : 'Could not reach the provider or the request timed out.',
+        rawMessage: msg,
+        checkpoint,
+      };
+    }
+
+    return {
+      kind: 'other',
+      title: lang === 'tr' ? 'Plan oluşturulamadı' : 'Could not generate plan',
+      rawMessage: msg,
+      checkpoint,
+    };
   };
 
   const handleUndoLatestSnapshot = async () => {
@@ -125,16 +321,24 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
     }
   };
 
-  useEffect(() => {
-    loadMentionTargets();
-  }, []);
+  // Compute bookmark counts per folder to rank frequent folders first
+  const folderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const b of availableBookmarks) {
+      if (b.parentId) {
+        counts.set(b.parentId, (counts.get(b.parentId) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [availableBookmarks]);
 
-  // Filter mention targets dynamically
+  // Filter mention targets dynamically (for inline @ autocomplete)
   const filteredMentions = useMemo((): MentionItem[] => {
     const q = mentionQuery.toLowerCase().trim();
 
-    const folderItems: MentionItem[] = availableFolders
+    const folderItems: MentionItem[] = [...availableFolders]
       .filter((f) => !q || f.title.toLowerCase().includes(q) || f.path.toLowerCase().includes(q))
+      .sort((a, b) => (folderCounts.get(b.id) || 0) - (folderCounts.get(a.id) || 0))
       .map((f) => ({
         id: f.id,
         type: 'folder',
@@ -153,9 +357,8 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         domain: b.domain,
       }));
 
-    // Folders first, then bookmarks (up to 8 total for quick browsing)
     return [...folderItems, ...bookmarkItems].slice(0, 8);
-  }, [availableFolders, availableBookmarks, mentionQuery]);
+  }, [availableFolders, availableBookmarks, folderCounts, mentionQuery]);
 
   // Handle typing & @ trigger in Textarea
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -189,6 +392,9 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       const newPrompt = newTextBefore + textAfter;
       setPromptText(newPrompt);
       setIsMentionOpen(false);
+      if (scopePreset === 'library') {
+        setScopePreset('selected');
+      }
 
       setTimeout(() => {
         if (textareaRef.current) {
@@ -254,46 +460,145 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
     }, 10);
   };
 
-  const activeMethodology = useMemo(
-    () => METHODOLOGY_PRESETS.find((p) => p.id === activeMethodologyId) || null,
-    [activeMethodologyId]
-  );
+  const activeMethodology = useMemo(() => {
+    if (activeMethodologyId === CUSTOM_METHODOLOGY_ID) {
+      const built = buildCustomMethodologyPrompt(customFolders, lang);
+      return {
+        id: CUSTOM_METHODOLOGY_ID,
+        icon: '✨',
+        shortLabel: built.name,
+        promptText: built.prompt,
+      };
+    }
+    const found = METHODOLOGY_PRESETS.find((p) => p.id === activeMethodologyId);
+    if (!found) return null;
+    return {
+      id: found.id,
+      icon: found.icon,
+      shortLabel: lang === 'tr' ? found.shortName.tr : found.shortName.en,
+      promptText: lang === 'tr' ? found.prompt.tr : found.prompt.en,
+    };
+  }, [activeMethodologyId, customFolders, lang]);
+
+  // Estimate link count, API calls, and approximate duration before submit
+  const scopeEstimate = useMemo(() => {
+    const totalAll = availableBookmarks.length;
+    const mentions = extractMentions(promptText);
+    const dumpFolderRegex =
+      /^(inbox|unsorted|other|needfix|temp|yeni|misc|çöp|cop|dump|imported|di[gğ]er)/i;
+    const inboxDumpIds = new Set(
+      availableFolders.filter((f) => dumpFolderRegex.test(f.title.trim())).map((f) => f.id)
+    );
+
+    const inboxCount = availableBookmarks.filter(
+      (b) => b.parentId === '1' || b.parentId === '2' || inboxDumpIds.has(b.parentId)
+    ).length;
+
+    let selectedCount = 0;
+    if (mentions.length > 0) {
+      const lowerMentions = new Set(mentions.map((m) => m.toLowerCase()));
+      const matchedFolders = availableFolders.filter(
+        (f) => lowerMentions.has(f.title.toLowerCase()) || lowerMentions.has(f.path.toLowerCase())
+      );
+      const matchedFolderIds = new Set(matchedFolders.map((f) => f.id));
+      const matchedFolderPaths = matchedFolders.map((f) => f.path);
+      selectedCount = availableBookmarks.filter(
+        (b) =>
+          matchedFolderIds.has(b.parentId) ||
+          matchedFolderPaths.some((p) => b.path === p || b.path.startsWith(p + ' / ')) ||
+          lowerMentions.has(b.title.trim().toLowerCase())
+      ).length;
+    }
+
+    const baseCount =
+      scopePreset === 'inbox' ? inboxCount : scopePreset === 'selected' ? selectedCount : totalAll;
+
+    const effectiveCount = tryFirst50 ? Math.min(50, baseCount) : baseCount;
+    const isSingleShot =
+      scopePreset === 'inbox' || scopePreset === 'selected' || effectiveCount <= 60;
+    const estRequests =
+      effectiveCount === 0
+        ? 0
+        : isSingleShot
+          ? 1
+          : 1 + Math.max(1, Math.ceil((effectiveCount * 0.25) / 40));
+    const estSeconds = estRequests === 0 ? 0 : estRequests === 1 ? 10 : estRequests * 12;
+    const estDuration =
+      estSeconds >= 60
+        ? lang === 'tr'
+          ? `~${Math.max(1, Math.round(estSeconds / 60))} dk`
+          : `~${Math.max(1, Math.round(estSeconds / 60))}m`
+        : lang === 'tr'
+          ? `~${Math.max(5, estSeconds)} sn`
+          : `~${Math.max(5, estSeconds)}s`;
+
+    return {
+      baseCount,
+      effectiveCount,
+      estRequests,
+      estDuration,
+      hasMentions: mentions.length > 0,
+    };
+  }, [availableBookmarks, availableFolders, promptText, scopePreset, tryFirst50, lang]);
 
   const canSubmit = Boolean(promptText.trim() || activeMethodology);
 
-  const handleGeneratePlan = async (rawPrompt: string) => {
+  const buildEffectivePrompt = (rawPrompt: string) => {
     const trimmed = rawPrompt.trim();
-    const methodologyRule = activeMethodology
-      ? lang === 'tr'
-        ? activeMethodology.prompt.tr
-        : activeMethodology.prompt.en
-      : '';
+    const methodologyRule = activeMethodology ? activeMethodology.promptText : '';
 
-    const effectivePrompt = trimmed
-      ? methodologyRule
-        ? `${trimmed}\n\n[Architecture Preset: ${
-            lang === 'tr' ? activeMethodology!.name.tr : activeMethodology!.name.en
-          }] ${methodologyRule}`
-        : trimmed
-      : methodologyRule;
+    if (trimmed) {
+      return methodologyRule
+        ? `${trimmed}\n\n[Architecture Preset: ${activeMethodology!.shortLabel}] ${methodologyRule}`
+        : trimmed;
+    }
+    return methodologyRule;
+  };
 
+  const handleGeneratePlan = async (
+    rawPrompt: string,
+    options: { resumeFromCheckpoint?: boolean } = {}
+  ) => {
+    const effectivePrompt = buildEffectivePrompt(rawPrompt);
     if (!effectivePrompt.trim()) return;
+
+    if (scopePreset === 'selected' && !scopeEstimate.hasMentions) {
+      setErrorState({
+        kind: 'validation',
+        title:
+          lang === 'tr'
+            ? 'Seçili klasör kapsamı için en az bir klasör hedefleyin'
+            : 'Mention at least one folder for Selected scope',
+        description:
+          lang === 'tr'
+            ? 'Aşağıdaki "Klasör hedefle" alanından bir klasör seçin veya kapsamı "Tüm kütüphane" olarak değiştirin.'
+            : 'Pick a folder from "Mention a folder" below or switch scope to "Entire library".',
+        rawMessage: 'Selected scope requires at least one @folder mention.',
+      });
+      setIsMentionSectionOpen(true);
+      return;
+    }
+
     setIsLoading(true);
-    setError(null);
+    setErrorState(null);
+    setShowErrorDetails(false);
     setAppliedSuccess(null);
     setCurrentPlan(null);
+    setLastSubmittedPrompt(rawPrompt);
 
     try {
       const settings = await getSettings();
       const hasKey = hasConfiguredKey(settings);
 
       if (!hasKey) {
-        setError(t('enterKeyPrompt'));
+        setErrorState(classifyCopilotError(t('enterKeyPrompt')));
         setIsLoading(false);
         return;
       }
 
-      // 1. Get smart tree DSL with @mention scoping & domain pre-clustering
+      const maxBookmarks = tryFirst50 ? 50 : undefined;
+
+      // 1. Get smart tree DSL with @mention scoping & optional scopePreset/maxBookmarks
       const tree = await getBookmarkTree();
       const flats = flattenBookmarks(tree);
       const folders = getAllFolders(tree);
@@ -310,14 +615,22 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       }
       setFolderMap(fMap);
 
-      const smartDsl = getSmartTreeDSL(tree, effectivePrompt);
+      const smartDsl = getSmartTreeDSL(tree, effectivePrompt, {
+        scopePreset,
+        maxBookmarks,
+      });
       if (smartDsl.unmatchedMentions && smartDsl.unmatchedMentions.length > 0) {
         const missingList = smartDsl.unmatchedMentions.map((m) => `@"${m}"`).join(', ');
-        setError(
-          lang === 'tr'
-            ? `Hedef bulunamadı: ${missingList}. Tüm kütüphane yanlışlıkla düzenlenmedi — lütfen geçerli bir klasör veya yer imi seçin.`
-            : `Target not found: ${missingList}. Aborted to avoid modifying your entire library — please pick a valid folder or bookmark.`
-        );
+        setErrorState({
+          kind: 'validation',
+          title:
+            lang === 'tr' ? `Hedef bulunamadı: ${missingList}` : `Target not found: ${missingList}`,
+          description:
+            lang === 'tr'
+              ? 'Tüm kütüphane yanlışlıkla düzenlenmedi — lütfen geçerli bir klasör veya yer imi seçin.'
+              : 'Aborted to avoid modifying your entire library — please pick a valid folder or bookmark.',
+          rawMessage: `Unmatched mentions: ${missingList}`,
+        });
         setIsLoading(false);
         return;
       }
@@ -326,13 +639,20 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       setScopeType(smartDsl.scopeType);
       setTargetedNames(smartDsl.targetFolderNames || []);
 
-      // 2. Select execution mode: Multi-Step Agent Harness (for global library) or Scoped Single-Shot
-      const useHarness = shouldUseAgentHarness(effectivePrompt, flats.length, smartDsl.scopeType);
+      // 2. Select execution mode: Multi-Step Agent Harness or Scoped Single-Shot
+      const useHarness =
+        scopePreset === 'library' &&
+        !tryFirst50 &&
+        shouldUseAgentHarness(effectivePrompt, flats.length, smartDsl.scopeType);
+
       if (useHarness) {
         setAgentProgress({
           phase: 'architect',
-          message:
-            lang === 'tr'
+          message: options.resumeFromCheckpoint
+            ? lang === 'tr'
+              ? 'Kaldığı yerden devam ediliyor...'
+              : 'Resuming from saved checkpoint...'
+            : lang === 'tr'
               ? 'Mimar: Kütüphane analizi yapılıyor ve taksonomi tasarlanıyor...'
               : 'Architect: Analyzing library structure and designing taxonomy...',
           percentage: 10,
@@ -347,17 +667,32 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         tree,
         compactTreeDSL: smartDsl.dsl,
         useHarness,
+        scopePreset,
+        maxBookmarks,
+        resumeFromCheckpoint: options.resumeFromCheckpoint,
         signal: controller.signal,
         onProgress: useHarness ? (p) => setAgentProgress(p) : undefined,
       });
 
       setCurrentPlan(plan);
+      setSavedCheckpoint(null);
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         toast.info(lang === 'tr' ? 'Plan oluşturma durduruldu' : 'Plan generation stopped');
       } else {
         console.error('Plan generation failed:', err);
-        setError(err?.message || 'Plan generation failed.');
+        let cpInfo = err?.checkpoint as { completed: number; total: number } | undefined;
+        if (typeof browser !== 'undefined' && browser.storage?.local) {
+          try {
+            const cpData = await browser.storage.local.get(HARNESS_CHECKPOINT_KEY);
+            const cp = cpData[HARNESS_CHECKPOINT_KEY] as AgentCheckpoint | undefined;
+            setSavedCheckpoint(cp || null);
+            if (!cpInfo && cp) {
+              cpInfo = { completed: cp.completedCount, total: cp.totalCount };
+            }
+          } catch {}
+        }
+        setErrorState(classifyCopilotError(err?.message || 'Plan generation failed.', cpInfo));
       }
     } finally {
       planAbortRef.current = null;
@@ -381,7 +716,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       });
       setCurrentPlan(null);
       setPromptText('');
-      await loadMentionTargets(); // Refresh folders for future mentions
+      await loadMentionTargets();
       onPlanApplied();
       toast.success(t('actionsAppliedSuccess', { count: result.appliedCount }), {
         action: {
@@ -391,7 +726,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       });
     } catch (err: any) {
       console.error('Plan execution failed:', err);
-      setError('An error occurred while executing plan actions.');
+      setErrorState(classifyCopilotError(err?.message || 'Error executing plan actions.'));
     } finally {
       setIsApplying(false);
     }
@@ -409,34 +744,40 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             {
               icon: '⚡',
               label: 'Kütüphaneyi düzenle',
+              scope: 'library' as CopilotScopePreset,
               prompt:
                 'Tüm yer imlerimi analiz et ve 6-8 ana tematik klasör altında baştan sona düzenle.',
             },
             {
               icon: '🎯',
               label: 'Favicon Launchpad',
+              scope: 'inbox' as CopilotScopePreset,
               prompt:
                 'Yer İmleri Çubuğundaki doğrudan web araçlarının başlıklarını temizle, yalnızca favicon ikonları bırak.',
             },
             {
               icon: '🧹',
-              label: 'Dağınıkları toparla',
+              label: 'Inbox düzenle',
+              scope: 'inbox' as CopilotScopePreset,
               prompt: 'Yer İmleri Çubuğundaki dağınık tüm yer imlerini kategorik klasörlere taşı.',
             },
             {
               icon: '🛡️',
               label: 'Klasörü koru',
+              scope: 'library' as CopilotScopePreset,
               prompt: `Dağınıkları düzenle ama @"${sampleProtectFolder}" klasörüne dokunma.`,
             },
             {
               icon: '🏷️',
               label: 'Başlıkları sadeleştir',
+              scope: 'library' as CopilotScopePreset,
               prompt:
                 'Gereksiz uzun veya URL şeklindeki yer imi başlıklarını temiz ve tanınabilir yap.',
             },
             {
               icon: '📁',
               label: 'Klasörleri birleştir',
+              scope: 'library' as CopilotScopePreset,
               prompt: 'Benzer konudaki dağınık alt klasörleri ana başlıklar altında birleştir.',
             },
           ]
@@ -444,52 +785,69 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             {
               icon: '⚡',
               label: 'Organize library',
+              scope: 'library' as CopilotScopePreset,
               prompt:
                 'Analyze all bookmarks and reorganize the entire library into cohesive thematic folders.',
             },
             {
               icon: '🎯',
               label: 'Favicon Launchpad',
+              scope: 'inbox' as CopilotScopePreset,
               prompt:
                 'Strip text titles of direct bookmarks bar web apps, leaving only clean favicon icons.',
             },
             {
               icon: '🧹',
-              label: 'Triage loose',
+              label: 'Triage inbox',
+              scope: 'inbox' as CopilotScopePreset,
               prompt:
                 'Organize unfiled and loose bookmarks on the Bookmarks Bar into structured folders.',
             },
             {
               icon: '🛡️',
               label: 'Protect folder',
+              scope: 'library' as CopilotScopePreset,
               prompt: `Organize loose bookmarks but do not touch @"${sampleProtectFolder}".`,
             },
             {
               icon: '🏷️',
               label: 'Clean titles',
+              scope: 'library' as CopilotScopePreset,
               prompt:
                 'Simplify and shorten verbose or raw URL bookmark titles into clean, recognizable names.',
             },
             {
               icon: '📁',
               label: 'Merge folders',
+              scope: 'library' as CopilotScopePreset,
               prompt: 'Merge scattered single-topic folders into cohesive thematic parent folders.',
             },
           ],
     [lang, sampleProtectFolder]
   );
 
+  // Frequent folders first, searchable cleanly
   const mentionableFolders = useMemo(() => {
     const q = folderSearchQuery.trim().toLowerCase();
-    return availableFolders.filter((f) => {
-      if (f.id === '1' || f.id === '2') return false;
-      if (!q) return true;
-      return f.title.toLowerCase().includes(q) || f.path.toLowerCase().includes(q);
-    });
-  }, [availableFolders, folderSearchQuery]);
+    return availableFolders
+      .filter((f) => {
+        if (f.id === '1' || f.id === '2' || f.id === '3') return false;
+        if (!q) return true;
+        return f.title.toLowerCase().includes(q) || f.path.toLowerCase().includes(q);
+      })
+      .sort((a, b) => {
+        const countDiff = (folderCounts.get(b.id) || 0) - (folderCounts.get(a.id) || 0);
+        if (countDiff !== 0) return countDiff;
+        if (a.parentId === '1' && b.parentId !== '1') return -1;
+        if (b.parentId === '1' && a.parentId !== '1') return 1;
+        return a.title.localeCompare(b.title);
+      });
+  }, [availableFolders, folderCounts, folderSearchQuery]);
+
+  const showMentionChips = isMentionSectionOpen || folderSearchQuery.trim().length > 0;
 
   const visibleMentionFolders = useMemo(
-    () => (showAllMentionFolders ? mentionableFolders : mentionableFolders.slice(0, 10)),
+    () => (showAllMentionFolders ? mentionableFolders : mentionableFolders.slice(0, 12)),
     [mentionableFolders, showAllMentionFolders]
   );
 
@@ -498,8 +856,18 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
     mentionableFolders.length - visibleMentionFolders.length
   );
 
+  const providerModels = PROVIDER_MODELS[activeProvider] || PROVIDER_MODELS.google;
+
+  const hasMatchingCheckpoint = Boolean(
+    savedCheckpoint &&
+    savedCheckpoint.completedCount > 0 &&
+    savedCheckpoint.completedCount < savedCheckpoint.totalCount &&
+    (!lastSubmittedPrompt ||
+      savedCheckpoint.userPrompt === buildEffectivePrompt(lastSubmittedPrompt))
+  );
+
   return (
-    <div className="mx-auto flex h-full w-full max-w-4xl flex-col space-y-3 p-3">
+    <div className="mx-auto flex h-full w-full max-w-4xl flex-col space-y-2.5 p-3">
       {/* 1. Compact 1-line Header */}
       {!currentPlan ? (
         <div className="flex items-center gap-1.5 px-0.5">
@@ -509,17 +877,11 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
           </h2>
         </div>
       ) : (
-        /* Compact Query Chip - saves vertical space when plan preview is active */
         <div className="bg-muted/30 border-border/60 animate-in fade-in flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs duration-150">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Wand2 className="text-primary size-3.5 shrink-0" />
             <span className="text-foreground truncate text-xs font-medium">
-              {promptText.trim() ||
-                (activeMethodology
-                  ? lang === 'tr'
-                    ? activeMethodology.name.tr
-                    : activeMethodology.name.en
-                  : '')}
+              {promptText.trim() || (activeMethodology ? activeMethodology.shortLabel : '')}
             </span>
           </div>
           <Button
@@ -534,25 +896,156 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         </div>
       )}
 
-      {/* Error Alert */}
-      {error && (
-        <div className="bg-destructive/10 border-destructive/20 text-destructive animate-in fade-in-0 flex items-center justify-between gap-2 rounded-lg border p-2 text-[11px] duration-150">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <AlertCircle className="size-3.5 shrink-0" />
-            <span className="truncate">{error}</span>
-          </div>
-          {(error.includes('API') || error.includes('Key')) && (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={onOpenSettings}
-              className="h-5 shrink-0 cursor-pointer px-1.5 text-[9.5px] active:scale-95"
+      {/* Categorized Neutral/Amber Error Alert + Checkpoint Resume */}
+      {errorState && (
+        <div className="animate-in fade-in-0 space-y-2 rounded-xl border border-amber-500/35 bg-amber-500/10 p-2.5 text-xs text-amber-900 duration-150 dark:text-amber-200">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex min-w-0 items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0 space-y-0.5">
+                <p className="text-xs font-semibold">{errorState.title}</p>
+                {errorState.description && (
+                  <p className="text-[11px] leading-snug opacity-85">{errorState.description}</p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setErrorState(null)}
+              className="cursor-pointer rounded p-0.5 opacity-60 hover:opacity-100"
+              aria-label={lang === 'tr' ? 'Kapat' : 'Dismiss'}
             >
-              {t('enterKeyBtn')}
-            </Button>
+              <X className="size-3.5" />
+            </button>
+          </div>
+
+          {/* Action Buttons by Error Kind */}
+          <div className="flex flex-wrap items-center gap-1.5 pl-6">
+            {(errorState.checkpoint || hasMatchingCheckpoint) && (
+              <Button
+                size="xs"
+                onClick={() => {
+                  const cp = errorState.checkpoint || {
+                    completed: savedCheckpoint!.completedCount,
+                    total: savedCheckpoint!.totalCount,
+                  };
+                  toast.info(
+                    lang === 'tr'
+                      ? `${cp.completed}/${cp.total} konumundan devam ediliyor`
+                      : `Resuming from ${cp.completed}/${cp.total}`
+                  );
+                  handleGeneratePlan(lastSubmittedPrompt || promptText, {
+                    resumeFromCheckpoint: true,
+                  });
+                }}
+                className="h-6.5 cursor-pointer bg-amber-600 px-2.5 text-[10.5px] font-semibold text-white hover:bg-amber-700"
+              >
+                <RotateCcw className="mr-1 size-3" />
+                {lang === 'tr'
+                  ? `Kaldığı yerden devam et (${(errorState.checkpoint?.completed ?? savedCheckpoint?.completedCount) || 0}/${(errorState.checkpoint?.total ?? savedCheckpoint?.totalCount) || 0})`
+                  : `Resume (${(errorState.checkpoint?.completed ?? savedCheckpoint?.completedCount) || 0}/${(errorState.checkpoint?.total ?? savedCheckpoint?.totalCount) || 0})`}
+              </Button>
+            )}
+
+            {(errorState.kind === 'quota' ||
+              errorState.kind === 'network' ||
+              errorState.kind === 'other') && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => handleGeneratePlan(lastSubmittedPrompt || promptText)}
+                className="bg-background/60 hover:bg-background h-6.5 cursor-pointer border-amber-500/40 px-2 text-[10.5px]"
+              >
+                <RotateCcw className="mr-1 size-3" />
+                {lang === 'tr' ? 'Tekrar dene' : 'Retry'}
+              </Button>
+            )}
+
+            {errorState.kind === 'quota' && (
+              <>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setIsModelMenuOpen(true)}
+                  className="bg-background/60 hover:bg-background h-6.5 cursor-pointer border-amber-500/40 px-2 text-[10.5px]"
+                >
+                  <Cpu className="mr-1 size-3" />
+                  {lang === 'tr' ? 'Başka model seç' : 'Switch model'}
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={onOpenSettings}
+                  className="bg-background/60 hover:bg-background h-6.5 cursor-pointer border-amber-500/40 px-2 text-[10.5px]"
+                >
+                  {lang === 'tr' ? 'Sağlayıcıyı değiştir' : 'Change provider'}
+                </Button>
+              </>
+            )}
+
+            {errorState.kind === 'auth' && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={onOpenSettings}
+                className="bg-background/60 hover:bg-background h-6.5 cursor-pointer border-amber-500/40 px-2.5 text-[10.5px] font-medium"
+              >
+                {t('enterKeyBtn') || (lang === 'tr' ? 'Anahtar Gir' : 'Enter Key')}
+              </Button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowErrorDetails((prev) => !prev)}
+              className="ml-auto cursor-pointer text-[10px] underline-offset-2 opacity-75 hover:underline hover:opacity-100"
+            >
+              {showErrorDetails
+                ? lang === 'tr'
+                  ? 'Detayları gizle'
+                  : 'Hide details'
+                : lang === 'tr'
+                  ? 'Detaylar'
+                  : 'Details'}
+            </button>
+          </div>
+
+          {showErrorDetails && (
+            <div className="bg-background/70 border-border/50 ml-6 max-h-24 overflow-y-auto rounded border p-2 font-mono text-[9.5px] break-all opacity-90">
+              {errorState.rawMessage}
+            </div>
           )}
         </div>
       )}
+
+      {/* Standalone Resume Banner when checkpoint exists without active error */}
+      {!errorState &&
+        !isLoading &&
+        !currentPlan &&
+        savedCheckpoint &&
+        savedCheckpoint.completedCount > 0 &&
+        savedCheckpoint.completedCount < savedCheckpoint.totalCount && (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+            <span>
+              {lang === 'tr'
+                ? `Yarım kalan bir işlem bulundu (${savedCheckpoint.completedCount}/${savedCheckpoint.totalCount}).`
+                : `Incomplete run saved (${savedCheckpoint.completedCount}/${savedCheckpoint.totalCount}).`}
+            </span>
+            <Button
+              size="xs"
+              onClick={() =>
+                handleGeneratePlan(promptText || savedCheckpoint.userPrompt, {
+                  resumeFromCheckpoint: true,
+                })
+              }
+              className="h-6 cursor-pointer bg-amber-600 px-2 text-[10px] text-white hover:bg-amber-700"
+            >
+              <RotateCcw className="mr-1 size-2.5" />
+              {lang === 'tr'
+                ? `Devam et (${savedCheckpoint.completedCount}/${savedCheckpoint.totalCount})`
+                : `Resume (${savedCheckpoint.completedCount}/${savedCheckpoint.totalCount})`}
+            </Button>
+          </div>
+        )}
 
       {/* Success Alert */}
       {appliedSuccess && (
@@ -644,108 +1137,257 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
         </div>
       )}
 
-      {/* Main Flow: Prompt Input → Quick Recipes → Methodologies → Mention a folder */}
+      {/* Main Flow */}
       {!currentPlan && (
-        <div className="flex flex-1 flex-col space-y-3">
-          {/* 1. Prompt Input Box */}
-          <div className="group relative">
-            {/* @ Mention Autocomplete Menu */}
-            {isMentionOpen && (
-              <MentionMenu
-                items={filteredMentions}
-                selectedIndex={mentionSelectedIndex}
-                onSelect={handleSelectMention}
-                onClose={() => setIsMentionOpen(false)}
+        <div className="flex flex-1 flex-col space-y-2.5">
+          {/* 1. Prompt Input Box + Attached Preset Popover + Under-Box Model/Privacy Bar */}
+          <div className="space-y-1">
+            <div className="group relative">
+              {isMentionOpen && (
+                <MentionMenu
+                  items={filteredMentions}
+                  selectedIndex={mentionSelectedIndex}
+                  onSelect={handleSelectMention}
+                  onClose={() => setIsMentionOpen(false)}
+                />
+              )}
+
+              <Textarea
+                ref={textareaRef}
+                value={promptText}
+                onChange={handleTextChange}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  lang === 'tr'
+                    ? 'İstediğiniz dilde yazın — hedeflemek için @ kullanın (ör. @"İş" dokunma, @"Okuma Listesi" düzenle)...'
+                    : 'Write in any language — type @ to target folders or links (e.g. keep @"Work", organize @"Reading List")...'
+                }
+                className="border-border/80 focus-visible:border-ring min-h-[88px] resize-none pr-12 pb-9 text-xs transition-shadow duration-150 focus-visible:ring-1"
+                disabled={isLoading}
               />
-            )}
 
-            <Textarea
-              ref={textareaRef}
-              value={promptText}
-              onChange={handleTextChange}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                lang === 'tr'
-                  ? 'İstediğiniz dilde yazın — hedeflemek için @ kullanın (ör. @"İş" dokunma, @"Okuma Listesi" düzenle)...'
-                  : 'Write in any language — type @ to target folders or links (e.g. keep @"Work", organize @"Reading List")...'
-              }
-              className="border-border/80 focus-visible:border-ring min-h-[92px] resize-none pr-12 pb-9 text-xs transition-shadow duration-150 focus-visible:ring-1"
-              disabled={isLoading}
-            />
-
-            {/* Bottom Toolbar inside Textarea */}
-            <div className="absolute right-2 bottom-2 left-2 flex items-center justify-between gap-1.5">
-              <div className="flex min-w-0 items-center gap-1">
-                {/* Clickable @ Target pill */}
-                <button
-                  type="button"
-                  onClick={handleTriggerMentionClick}
-                  title={
-                    lang === 'tr'
-                      ? 'Klasör veya yer imi hedefle (@)'
-                      : 'Mention target folder or bookmark (@)'
-                  }
-                  className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex shrink-0 cursor-pointer items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
-                >
-                  <AtSign className="text-primary size-2.5" />
-                  <span>Target</span>
-                </button>
-
-                {/* Preset selector pill */}
-                {activeMethodology ? (
-                  <span className="border-primary/40 bg-primary/10 text-primary flex max-w-[140px] items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium">
-                    <span className="shrink-0">{activeMethodology.icon}</span>
-                    <span className="truncate">
-                      {lang === 'tr' ? activeMethodology.name.tr : activeMethodology.name.en}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setActiveMethodologyId(null)}
-                      className="hover:text-foreground ml-0.5 cursor-pointer"
-                      title={lang === 'tr' ? 'Preseti kaldır' : 'Clear preset'}
-                    >
-                      <X className="size-2.5" />
-                    </button>
-                  </span>
-                ) : (
+              {/* Bottom Toolbar inside Textarea */}
+              <div className="absolute right-2 bottom-2 left-2 flex items-center justify-between gap-1.5">
+                <div className="flex min-w-0 items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setIsMethodologiesOpen((prev) => !prev)}
+                    onClick={handleTriggerMentionClick}
                     title={
                       lang === 'tr'
-                        ? 'Yapısal metodoloji şablonu (Preset) seç'
-                        : 'Select architecture methodology preset'
+                        ? 'Klasör veya yer imi hedefle (@)'
+                        : 'Mention target folder or bookmark (@)'
                     }
-                    className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex shrink-0 cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
+                    className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex shrink-0 cursor-pointer items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
                   >
-                    <Compass className="size-2.5" />
-                    <span>Preset</span>
+                    <AtSign className="text-primary size-2.5" />
+                    <span>Target</span>
                   </button>
-                )}
+
+                  {/* Preset selector chip (no parentheses clipping, single representation) */}
+                  {activeMethodology ? (
+                    <span className="border-primary/40 bg-primary/10 text-primary flex max-w-[180px] items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium">
+                      <button
+                        type="button"
+                        onClick={() => setIsMethodologiesOpen((prev) => !prev)}
+                        className="flex min-w-0 cursor-pointer items-center gap-1"
+                        title={
+                          lang === 'tr'
+                            ? 'Şablonu değiştirmek için tıkla'
+                            : 'Click to switch preset'
+                        }
+                      >
+                        <span className="shrink-0">{activeMethodology.icon}</span>
+                        <span className="truncate">{activeMethodology.shortLabel}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveMethodologyId(null)}
+                        className="hover:text-foreground ml-0.5 shrink-0 cursor-pointer"
+                        title={lang === 'tr' ? 'Preseti kaldır' : 'Clear preset'}
+                      >
+                        <X className="size-2.5" />
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsMethodologiesOpen((prev) => !prev)}
+                      title={
+                        lang === 'tr'
+                          ? 'Yapısal metodoloji şablonu (Preset) seç'
+                          : 'Select architecture methodology preset'
+                      }
+                      className="bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50 flex shrink-0 cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition-colors active:scale-95"
+                    >
+                      <Compass className="size-2.5" />
+                      <span>Preset</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Brand Send Button */}
+                <button
+                  type="button"
+                  disabled={isLoading || !canSubmit}
+                  onClick={() => handleGeneratePlan(promptText)}
+                  title={t('generatePlanTooltip')}
+                  aria-label={t('generatePlanTooltip')}
+                  className={`bg-primary text-primary-foreground flex size-6.5 shrink-0 items-center justify-center rounded-md shadow-2xs transition-all duration-120 ${
+                    canSubmit && !isLoading
+                      ? 'hover:bg-primary/90 cursor-pointer active:scale-95'
+                      : 'cursor-not-allowed opacity-45'
+                  }`}
+                >
+                  {isLoading ? (
+                    <Loader2 className="size-3 animate-spin duration-500" />
+                  ) : (
+                    <Send className="size-3" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Under-box Footer: Quick Model Switcher + Privacy line */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-[10px]">
+              <DropdownMenu open={isModelMenuOpen} onOpenChange={setIsModelMenuOpen}>
+                <DropdownMenuTrigger
+                  className="text-muted-foreground hover:text-foreground hover:bg-muted/50 inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 font-medium transition-colors"
+                  title={lang === 'tr' ? 'Hızlı model değiştir' : 'Quick switch model'}
+                >
+                  <Cpu className="text-primary size-2.5" />
+                  <span>{formatModelDisplayName(activeModelName)}</span>
+                  <ChevronDown className="size-2.5 opacity-70" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-auto min-w-52 text-xs">
+                  <div className="text-muted-foreground px-2 py-1 text-[10px] font-semibold">
+                    {activeProviderConfig.label}
+                  </div>
+                  {providerModels.map((model) => {
+                    const isActive = model === activeModelName;
+                    return (
+                      <DropdownMenuItem
+                        key={model}
+                        onClick={() => handleQuickModelSwitch(model)}
+                        className="flex cursor-pointer items-center justify-between gap-2 text-xs"
+                      >
+                        <span className="truncate">{formatModelDisplayName(model)}</span>
+                        {isActive && <Check className="text-primary size-3.5 shrink-0" />}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setIsModelMenuOpen(false);
+                      onOpenSettings();
+                    }}
+                    className="cursor-pointer text-xs"
+                  >
+                    <SlidersHorizontal className="size-3" />
+                    <span>
+                      {lang === 'tr'
+                        ? 'Sağlayıcıyı değiştir / Ayarlar...'
+                        : 'Change provider / Settings...'}
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <span className="text-muted-foreground/80 truncate text-[9.5px]">
+                {lang === 'tr'
+                  ? 'Başlık, URL ve klasör adı gönderilir'
+                  : 'Titles, URLs & folder names are sent'}
+              </span>
+            </div>
+
+            {/* Methodology Preset Popover (collapsed by default, closes on select) */}
+            <MethodologySelector
+              lang={lang}
+              activeMethodologyId={activeMethodologyId}
+              customFolders={customFolders}
+              isOpen={isMethodologiesOpen}
+              onClose={() => setIsMethodologiesOpen(false)}
+              onSelectMethodology={(preset) => {
+                setActiveMethodologyId(preset ? preset.id : null);
+                textareaRef.current?.focus();
+              }}
+              onSelectCustomFolders={(folders) => {
+                setCustomFolders(folders);
+                try {
+                  localStorage.setItem(CUSTOM_FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+                } catch {}
+                setActiveMethodologyId(CUSTOM_METHODOLOGY_ID);
+                textareaRef.current?.focus();
+              }}
+            />
+          </div>
+
+          {/* 2. Pre-submit Transparency Bar: Scope + Cost Estimate + Try 50 First */}
+          <div className="border-border/60 bg-muted/15 space-y-1.5 rounded-lg border p-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {/* Scope Selector Pills */}
+              <div className="bg-background/70 border-border/50 inline-flex items-center rounded-md border p-0.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setScopePreset('library')}
+                  className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                    scopePreset === 'library'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {lang === 'tr' ? 'Tüm kütüphane' : 'Entire library'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScopePreset('inbox')}
+                  className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                    scopePreset === 'inbox'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {lang === 'tr' ? 'Sadece Inbox' : 'Inbox only'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScopePreset('selected')}
+                  className={`cursor-pointer rounded px-2 py-0.5 font-medium transition-colors ${
+                    scopePreset === 'selected'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {lang === 'tr' ? 'Seçili klasörler' : 'Selected folders'}
+                </button>
               </div>
 
-              <button
-                type="button"
-                disabled={isLoading || !canSubmit}
-                onClick={() => handleGeneratePlan(promptText)}
-                title={t('generatePlanTooltip')}
-                aria-label={t('generatePlanTooltip')}
-                className={`flex size-6.5 shrink-0 items-center justify-center rounded-md transition-all duration-120 ${
-                  canSubmit && !isLoading
-                    ? 'bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer shadow-2xs active:scale-95'
-                    : 'bg-muted text-muted-foreground border-border/70 cursor-not-allowed border opacity-90'
-                }`}
-              >
-                {isLoading ? (
-                  <Loader2 className="size-3 animate-spin duration-500" />
-                ) : (
-                  <Send className="size-3" />
-                )}
-              </button>
+              {/* Estimated Cost / Duration Badge */}
+              <span className="text-muted-foreground font-mono text-[10px]">
+                {scopeEstimate.effectiveCount} link · ~{scopeEstimate.estRequests}{' '}
+                {lang === 'tr' ? 'istek' : 'reqs'} · {scopeEstimate.estDuration}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <label className="flex cursor-pointer items-center gap-1.5 select-none">
+                <input
+                  type="checkbox"
+                  checked={tryFirst50}
+                  onChange={(e) => setTryFirst50(e.target.checked)}
+                  className="border-border accent-primary size-3.5 cursor-pointer rounded"
+                />
+                <span className="text-foreground text-[10.5px] font-medium">
+                  {lang === 'tr' ? 'Önce 50 linkle dene' : 'Try 50 links first'}
+                </span>
+              </label>
+              <span className="text-muted-foreground/80 text-[9.5px]">
+                {lang === 'tr' ? 'Kota dostu hızlı önizleme' : 'Fast quota-safe preview'}
+              </span>
             </div>
           </div>
 
-          {/* 2. Quick Recipes (4 primary + More toggle) */}
+          {/* 3. Quick Recipes */}
           <div className="space-y-1.5">
             <span className="text-muted-foreground/80 block px-0.5 text-[9.5px] font-semibold tracking-wider uppercase">
               {lang === 'tr' ? 'Hızlı Tarifler' : 'Quick Recipes'}
@@ -757,9 +1399,8 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                   type="button"
                   onClick={() => {
                     setPromptText(recipe.prompt);
-                    if (textareaRef.current) {
-                      textareaRef.current.focus();
-                    }
+                    setScopePreset(recipe.scope);
+                    textareaRef.current?.focus();
                   }}
                   className="bg-muted/30 hover:bg-muted/70 text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10.5px] transition-all duration-120 active:scale-[0.96]"
                 >
@@ -785,106 +1426,159 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             </div>
           </div>
 
-          {/* 3. Architecture Methodologies (Collapsed by default, acts as Style Preset) */}
-          <MethodologySelector
-            lang={lang}
-            activeMethodologyId={activeMethodologyId}
-            isOpen={isMethodologiesOpen}
-            onToggleOpen={() => setIsMethodologiesOpen((prev) => !prev)}
-            onSelectMethodology={(preset) => {
-              setActiveMethodologyId(preset ? preset.id : null);
-              textareaRef.current?.focus();
-            }}
-          />
-
-          {/* 4. Mention a Folder (Searchable @mention source without unnecessary library stats) */}
+          {/* 4. Mention a Folder (Collapsed by default, Search + Target/Protect always accessible) */}
           <div className="border-border/60 bg-muted/15 space-y-2 rounded-lg border p-2.5 text-xs">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-foreground/90 flex items-center gap-1.5 text-[11px] font-semibold">
-                <AtSign className="text-primary size-3.5" />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsMentionSectionOpen((prev) => !prev)}
+                aria-expanded={showMentionChips}
+                className="text-foreground/90 flex cursor-pointer items-center gap-1 text-[11px] font-semibold"
+              >
+                {showMentionChips ? (
+                  <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
+                ) : (
+                  <ChevronRight className="text-muted-foreground size-3.5 shrink-0" />
+                )}
+                <AtSign className="text-primary size-3.5 shrink-0" />
                 <span>{lang === 'tr' ? 'Klasör hedefle' : 'Mention a folder'}</span>
-              </div>
-              <div className="relative w-32 sm:w-40">
-                <Search className="text-muted-foreground pointer-events-none absolute top-1.5 left-2 size-3" />
-                <Input
-                  value={folderSearchQuery}
-                  onChange={(e) => {
-                    setFolderSearchQuery(e.target.value);
-                    setShowAllMentionFolders(false);
-                  }}
-                  placeholder={lang === 'tr' ? 'Klasör ara...' : 'Filter folders...'}
-                  className="bg-background/70 h-6 pr-5 pl-6 text-[10px]"
-                />
-                {folderSearchQuery && (
+                <Badge variant="outline" className="ml-0.5 h-4 px-1.5 py-0 text-[9px]">
+                  {mentionableFolders.length}
+                </Badge>
+              </button>
+
+              <div className="flex items-center gap-1.5">
+                {/* Target vs Protect Insert Mode */}
+                <div
+                  className="bg-background/70 border-border/50 inline-flex items-center rounded border p-0.5 text-[9.5px]"
+                  title={
+                    lang === 'tr'
+                      ? 'Klasöre tıklanınca hedefle veya koru'
+                      : 'Insert mode when clicking a folder chip'
+                  }
+                >
                   <button
                     type="button"
-                    onClick={() => setFolderSearchQuery('')}
-                    className="text-muted-foreground hover:text-foreground absolute top-1.5 right-1.5 cursor-pointer"
+                    onClick={() => setMentionInsertMode('target')}
+                    className={`cursor-pointer rounded px-1.5 py-0.5 font-medium transition-colors ${
+                      mentionInsertMode === 'target'
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
                   >
-                    <X className="size-3" />
+                    {lang === 'tr' ? 'Hedef' : 'Target'}
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setMentionInsertMode('protect')}
+                    className={`flex cursor-pointer items-center gap-0.5 rounded px-1.5 py-0.5 font-medium transition-colors ${
+                      mentionInsertMode === 'protect'
+                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Shield className="size-2.5" />
+                    <span>{lang === 'tr' ? 'Dokunma' : 'Protect'}</span>
+                  </button>
+                </div>
+
+                {/* Search Input stays visible even when collapsed */}
+                <div className="relative w-28 sm:w-36">
+                  <Search className="text-muted-foreground pointer-events-none absolute top-1.5 left-2 size-3" />
+                  <Input
+                    value={folderSearchQuery}
+                    onChange={(e) => {
+                      setFolderSearchQuery(e.target.value);
+                      setShowAllMentionFolders(false);
+                    }}
+                    placeholder={lang === 'tr' ? 'Klasör ara...' : 'Filter folders...'}
+                    className="bg-background/70 h-6 pr-5 pl-6 text-[10px]"
+                  />
+                  {folderSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setFolderSearchQuery('')}
+                      className="text-muted-foreground hover:text-foreground absolute top-1.5 right-1.5 cursor-pointer"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
-            {mentionableFolders.length === 0 ? (
-              <p className="text-muted-foreground py-1 text-[10.5px]">
-                {lang === 'tr' ? 'Eşleşen klasör bulunamadı.' : 'No matching folders.'}
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-1 pt-0.5">
-                {visibleMentionFolders.map((folder) => {
-                  const emojiOnly = isEmojiOnlyTitle(folder.title);
-                  const formattedLabel = formatFolderTitle(folder.title, folder.path, lang);
+            {showMentionChips && (
+              <>
+                {mentionableFolders.length === 0 ? (
+                  <p className="text-muted-foreground py-1 text-[10.5px]">
+                    {lang === 'tr' ? 'Eşleşen klasör bulunamadı.' : 'No matching folders.'}
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {visibleMentionFolders.map((folder) => {
+                      const emojiOnly = isEmojiOnlyTitle(folder.title);
+                      const chipLabel = emojiOnly
+                        ? folder.title.trim()
+                        : folder.title.trim() || formatFolderTitle(folder.title, folder.path, lang);
 
-                  return (
-                    <button
-                      key={folder.id}
-                      type="button"
-                      onClick={() => {
-                        const mentionText = `@"${folder.title}" `;
-                        setPromptText((prev) =>
-                          prev ? `${prev.trim()} ${mentionText}` : mentionText
-                        );
-                        textareaRef.current?.focus();
-                      }}
-                      title={
-                        lang === 'tr'
-                          ? `@"${folder.title}" eklemek için tıklayın (${folder.path})`
-                          : `Click to insert @"${folder.title}" (${folder.path})`
-                      }
-                      className="border-border/50 bg-background/70 hover:bg-muted text-muted-foreground hover:text-foreground flex max-w-[165px] cursor-pointer items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[10px] transition-colors"
-                    >
-                      {!emojiOnly && <Folder className="size-2.5 shrink-0 text-amber-500" />}
-                      <span className="truncate">{formattedLabel}</span>
-                    </button>
-                  );
-                })}
+                      return (
+                        <button
+                          key={folder.id}
+                          type="button"
+                          onClick={() => {
+                            const mentionText =
+                              mentionInsertMode === 'protect'
+                                ? lang === 'tr'
+                                  ? `@"${folder.title}" dokunma `
+                                  : `do not touch @"${folder.title}" `
+                                : `@"${folder.title}" `;
+                            setPromptText((prev) =>
+                              prev ? `${prev.trim()} ${mentionText}` : mentionText
+                            );
+                            if (mentionInsertMode === 'target' && scopePreset === 'library') {
+                              setScopePreset('selected');
+                            }
+                            textareaRef.current?.focus();
+                          }}
+                          title={folder.path}
+                          className={`flex max-w-[165px] cursor-pointer items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[10px] transition-colors ${
+                            mentionInsertMode === 'protect'
+                              ? 'border-amber-500/35 bg-amber-500/5 text-amber-800 hover:bg-amber-500/15 dark:text-amber-300'
+                              : 'border-border/50 bg-background/70 hover:bg-muted text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          {!emojiOnly && <Folder className="size-2.5 shrink-0 text-amber-500" />}
+                          <span className="truncate">{chipLabel}</span>
+                        </button>
+                      );
+                    })}
 
-                {remainingFolderCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllMentionFolders(true)}
-                    className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium transition-colors"
-                  >
-                    +{remainingFolderCount} {lang === 'tr' ? 'daha' : 'more'}
-                  </button>
+                    {remainingFolderCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllMentionFolders(true)}
+                        className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                      >
+                        +{remainingFolderCount} {lang === 'tr' ? 'daha' : 'more'}
+                      </button>
+                    )}
+
+                    {showAllMentionFolders && mentionableFolders.length > 12 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllMentionFolders(false)}
+                        className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                      >
+                        {lang === 'tr' ? 'Daha az' : 'Show less'}
+                      </button>
+                    )}
+                  </div>
                 )}
-
-                {showAllMentionFolders && mentionableFolders.length > 10 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllMentionFolders(false)}
-                    className="border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/40 cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium transition-colors"
-                  >
-                    {lang === 'tr' ? 'Daha az' : 'Show less'}
-                  </button>
-                )}
-              </div>
+              </>
             )}
           </div>
 
-          {/* 5. Recent Backups (Undo strip shown only when snapshots exist) */}
+          {/* 5. Recent Backups (shown at bottom only when snapshots exist) */}
           {recentSnapshots.length > 0 && (
             <div className="border-border/50 bg-muted/10 space-y-1 rounded-lg border px-2.5 py-2 text-xs">
               <div className="text-muted-foreground flex items-center gap-1.5 text-[10px] font-semibold">
