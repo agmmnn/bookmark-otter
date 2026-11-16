@@ -309,6 +309,17 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       setFolderMap(fMap);
 
       const smartDsl = getSmartTreeDSL(tree, effectivePrompt);
+      if (smartDsl.unmatchedMentions && smartDsl.unmatchedMentions.length > 0) {
+        const missingList = smartDsl.unmatchedMentions.map((m) => `@"${m}"`).join(', ');
+        setError(
+          lang === 'tr'
+            ? `Hedef bulunamadı: ${missingList}. Tüm kütüphane yanlışlıkla düzenlenmedi — lütfen geçerli bir klasör veya yer imi seçin.`
+            : `Target not found: ${missingList}. Aborted to avoid modifying your entire library — please pick a valid folder or bookmark.`
+        );
+        setIsLoading(false);
+        return;
+      }
+
       setAnalyzedCount(smartDsl.analyzedCount);
       setScopeType(smartDsl.scopeType);
       setTargetedNames(smartDsl.targetFolderNames || []);
@@ -371,6 +382,11 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
     }
   };
 
+  const sampleProtectFolder = useMemo(
+    () => availableFolders.find((f) => f.id !== '1' && f.id !== '2')?.title || 'Bookmarks Bar',
+    [availableFolders]
+  );
+
   const recipes = useMemo(
     () =>
       lang === 'tr'
@@ -395,7 +411,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             {
               icon: '🛡️',
               label: 'Klasörü koru',
-              prompt: 'Dağınıkları düzenle ama @"needfix" klasörüne asla dokunma.',
+              prompt: `Dağınıkları düzenle ama @"${sampleProtectFolder}" klasörüne dokunma.`,
             },
             {
               icon: '🏷️',
@@ -431,7 +447,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             {
               icon: '🛡️',
               label: 'Protect folder',
-              prompt: 'Organize loose bookmarks but do not touch @"needfix".',
+              prompt: `Organize loose bookmarks but do not touch @"${sampleProtectFolder}".`,
             },
             {
               icon: '🏷️',
@@ -445,7 +461,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
               prompt: 'Merge scattered single-topic folders into cohesive thematic parent folders.',
             },
           ],
-    [lang]
+    [lang, sampleProtectFolder]
   );
 
   const mentionableFolders = useMemo(() => {

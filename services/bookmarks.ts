@@ -139,11 +139,12 @@ export async function getRecentBookmarks(limit = 20): Promise<FlatBookmark[]> {
 }
 
 /**
- * Extract @mentions from user prompt (e.g. @"Folder Name" or @FolderName)
+ * Extract @mentions from user prompt (e.g. @"Folder Name" or @FolderName).
+ * Requires start-of-string or leading whitespace so email addresses are ignored.
  */
 export function extractMentions(prompt: string): string[] {
   const matches: string[] = [];
-  const regex = /@"([^"]+)"|@(\S+)/g;
+  const regex = /(?:^|\s)(?:@"([^"]+)"|@([^\s@"']+))/g;
   let match;
   while ((match = regex.exec(prompt)) !== null) {
     const raw = match[1] || match[2];
@@ -159,10 +160,11 @@ export interface SmartTreeDSLResult {
   analyzedCount: number;
   scopeType: 'targeted' | 'clustered' | 'full';
   targetFolderNames?: string[];
+  unmatchedMentions?: string[];
 }
 
 /**
- * Smart Tree DSL Generator with @mention scoping, domain pre-clustering,
+ * Smart Tree DSL Generator with @mention scoping (folders & bookmarks), domain pre-clustering,
  * and delta/loose item prioritization for large bookmark libraries.
  */
 export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): SmartTreeDSLResult {
@@ -170,34 +172,77 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
   const bookmarks = flattenBookmarks(nodes);
   const mentions = extractMentions(userPrompt);
 
-  // 1. Check if any mentioned name matches a folder
+  // 1. Detect whether a mention is explicitly marked as protected/excluded ("do not touch @X", "@X dokunma")
+  const protectedPromptRegex =
+    /(?:do not touch|don't touch|never touch|exclude|skip|protect|ignore)\s+@|@(?:[^\s@"']+|"[^"]+")\s+(?:klasörüne\s+|klasörünü\s+)?(?:dokunma|hariç|koru|atla|elleme)/i;
+  const isExclusionIntent = protectedPromptRegex.test(userPrompt);
+
+  // 2. Match mentioned names against both folders and bookmarks
   const targetedFolders: FlatFolder[] = [];
+  const protectedFolders: FlatFolder[] = [];
+  const targetedBookmarksMap = new Map<string, FlatBookmark>();
+  const unmatchedMentions: string[] = [];
+
   if (mentions.length > 0) {
     for (const m of mentions) {
       const lower = m.toLowerCase();
-      const matched = folders.find(
+      const matchedFolder = folders.find(
         (f) =>
           f.title.toLowerCase() === lower ||
+          f.path.toLowerCase().endsWith(' / ' + lower) ||
           f.path.toLowerCase().endsWith('/' + lower) ||
           f.path.toLowerCase() === lower ||
           f.id === m
       );
-      if (matched && !targetedFolders.some((tf) => tf.id === matched.id)) {
-        targetedFolders.push(matched);
+
+      if (matchedFolder) {
+        if (isExclusionIntent) {
+          if (!protectedFolders.some((pf) => pf.id === matchedFolder.id)) {
+            protectedFolders.push(matchedFolder);
+          }
+        } else if (!targetedFolders.some((tf) => tf.id === matchedFolder.id)) {
+          targetedFolders.push(matchedFolder);
+        }
+        continue;
+      }
+
+      const matchedBookmarks = bookmarks.filter(
+        (b) =>
+          b.title.trim().toLowerCase() === lower ||
+          b.url.toLowerCase() === lower ||
+          b.domain.toLowerCase() === lower ||
+          b.id === m
+      );
+
+      if (matchedBookmarks.length > 0) {
+        for (const mb of matchedBookmarks) {
+          targetedBookmarksMap.set(mb.id, mb);
+        }
+      } else {
+        unmatchedMentions.push(m);
       }
     }
   }
 
-  // --- CASE A: TARGETED FOLDER MENTION (@"B", @Dev, etc.) ---
-  if (targetedFolders.length > 0) {
+  // --- CASE A: TARGETED FOLDER OR BOOKMARK MENTION (@"B", @"Bookmark Title", etc.) ---
+  if (targetedFolders.length > 0 || targetedBookmarksMap.size > 0) {
     const targetFolderIds = new Set(targetedFolders.map((tf) => tf.id));
     const targetFolderPaths = targetedFolders.map((tf) => tf.path);
 
-    // Bookmarks strictly inside the targeted folders (or subfolders)
-    const targetBookmarks = bookmarks.filter((b) => {
-      if (targetFolderIds.has(b.parentId)) return true;
-      return targetFolderPaths.some((tp) => b.path === tp || b.path.startsWith(tp + '/'));
-    });
+    // Collect bookmarks inside targeted folders + any directly mentioned bookmarks
+    const combinedTargetMap = new Map<string, FlatBookmark>(targetedBookmarksMap);
+    if (targetedFolders.length > 0) {
+      for (const b of bookmarks) {
+        if (
+          targetFolderIds.has(b.parentId) ||
+          targetFolderPaths.some((tp) => b.path === tp || b.path.startsWith(tp + ' / '))
+        ) {
+          combinedTargetMap.set(b.id, b);
+        }
+      }
+    }
+
+    const targetBookmarks = Array.from(combinedTargetMap.values());
 
     const folderLines = folders
       .filter((f) => f.id !== '0')
@@ -209,27 +254,68 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
       return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
     });
 
-    const targetNames = targetedFolders.map((f) => `"${f.title}" (ID: ${f.id})`).join(', ');
+    const targetSummaryParts: string[] = [];
+    if (targetedFolders.length > 0) {
+      targetSummaryParts.push(
+        `folder(s): ${targetedFolders.map((f) => `"${f.title}" (ID: ${f.id})`).join(', ')}`
+      );
+    }
+    if (targetedBookmarksMap.size > 0) {
+      targetSummaryParts.push(
+        `bookmark(s): ${Array.from(targetedBookmarksMap.values())
+          .map((b) => `"${b.title || b.domain}" (ID: ${b.id})`)
+          .join(', ')}`
+      );
+    }
 
     const dsl = [
-      `# TARGET DIRECTIVE: The user explicitly targeted folder(s): ${targetNames}.`,
-      `# USER GOAL: Deeply inspect and organize the bookmarks inside this folder. Create subcategories, rename, or clean up clutter.`,
-      `# TOTAL TARGET BOOKMARKS TO ORGANIZE: ${targetBookmarks.length}`,
+      `# TARGET DIRECTIVE: The user explicitly targeted ${targetSummaryParts.join(' and ')}.`,
+      `# USER GOAL: Operate strictly on the targeted item(s)/folder(s) below. Do NOT reorganize, move, or remove unrelated bookmarks elsewhere in the library.`,
+      `# TOTAL TARGET BOOKMARKS IN SCOPE: ${targetBookmarks.length}`,
       '',
       '# EXISTING FOLDER PATHS FOR REFERENCE (id|parentId|path)',
       ...folderLines,
       '',
-      `# BOOKMARKS INSIDE TARGETED FOLDER(S) (id|parentId|currentFolder|title|domain)`,
+      `# TARGETED BOOKMARKS IN SCOPE (id|parentId|currentFolder|title|domain)`,
       ...targetBookmarkLines,
     ].join('\n');
+
+    const targetLabels = [
+      ...targetedFolders.map((f) => f.title),
+      ...Array.from(targetedBookmarksMap.values()).map((b) => b.title || b.domain),
+    ];
 
     return {
       dsl,
       analyzedCount: targetBookmarks.length,
       scopeType: 'targeted',
-      targetFolderNames: targetedFolders.map((f) => f.title),
+      targetFolderNames: targetLabels.slice(0, 4),
     };
   }
+
+  // If user explicitly used @mentions but none matched any folder or bookmark,
+  // avoid silently falling back to full-library reorganization.
+  if (unmatchedMentions.length > 0) {
+    return {
+      dsl: '',
+      analyzedCount: 0,
+      scopeType: 'targeted',
+      unmatchedMentions,
+    };
+  }
+
+  const protectedFolderIds = new Set(protectedFolders.map((pf) => pf.id));
+  const protectedFolderPaths = protectedFolders.map((pf) => pf.path);
+  const isInsideProtected = (b: FlatBookmark) =>
+    protectedFolderIds.has(b.parentId) ||
+    protectedFolderPaths.some((pp) => b.path === pp || b.path.startsWith(pp + ' / '));
+
+  const protectedDirectiveLine =
+    protectedFolders.length > 0
+      ? `# PROTECTED / IMMUNE FOLDERS (DO NOT MOVE, RENAME, OR DELETE ANY ITEM INSIDE): ${protectedFolders
+          .map((pf) => `"${pf.title}"`)
+          .join(', ')}`
+      : '';
 
   // --- CASE B: LARGE REPOSITORY DOMAIN PRE-CLUSTERING (Bookmarks > 100) ---
   if (bookmarks.length > 100) {
@@ -240,14 +326,18 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
     // 2. Identify Catch-all / Dump folders (e.g. other, needfix, temp, yeni, misc, imported)
     const dumpFolderRegex = /^(other|needfix|temp|yeni|misc|çöp|cop|dump|imported|di[gğ]er)/i;
-    const dumpFolders = folders.filter((f) => dumpFolderRegex.test(f.title.trim()));
+    const dumpFolders = folders.filter(
+      (f) => dumpFolderRegex.test(f.title.trim()) && !protectedFolderIds.has(f.id)
+    );
     const dumpFolderIds = new Set(dumpFolders.map((f) => f.id));
-    const dumpFolderBookmarks = bookmarks.filter((b) => dumpFolderIds.has(b.parentId));
+    const dumpFolderBookmarks = bookmarks.filter(
+      (b) => dumpFolderIds.has(b.parentId) && !isInsideProtected(b)
+    );
 
-    // 3. Domain clustering across all bookmarks
+    // 3. Domain clustering across all non-protected bookmarks
     const domainMap = new Map<string, { count: number; sampleFolders: Set<string> }>();
     for (const b of bookmarks) {
-      if (!b.domain) continue;
+      if (!b.domain || isInsideProtected(b)) continue;
       const entry = domainMap.get(b.domain) || { count: 0, sampleFolders: new Set() };
       entry.count++;
       entry.sampleFolders.add(b.path.split('/').pop() || b.path);
@@ -265,13 +355,20 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
     // 4. Existing cohesive folders summary
     const cohesiveFolders = folders
-      .filter((f) => f.id !== '0' && f.id !== '1' && f.id !== '2' && !dumpFolderIds.has(f.id))
+      .filter(
+        (f) =>
+          f.id !== '0' &&
+          f.id !== '1' &&
+          f.id !== '2' &&
+          !dumpFolderIds.has(f.id) &&
+          !protectedFolderIds.has(f.id)
+      )
       .map((f) => {
         const count = bookmarks.filter((b) => b.parentId === f.id).length;
         return `${f.id}|${f.parentId || '1'}|${f.path} (${count} items)`;
       });
 
-    // 5. High-priority actionable bookmarks: all loose + all dump bookmarks (up to 150 items)
+    // 5. High-priority actionable bookmarks: all loose + all non-protected dump bookmarks (up to 150 items)
     const actionableBookmarks = [...looseBookmarks, ...dumpFolderBookmarks].slice(0, 150);
 
     const actionableBookmarkLines = actionableBookmarks.map((b) => {
@@ -282,6 +379,7 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
     const dsl = [
       `# ARCHIVE OVERVIEW (${bookmarks.length} total bookmarks across ${folders.length} folders)`,
+      ...(protectedDirectiveLine ? [protectedDirectiveLine] : []),
       `# LOOSE UNORGANIZED BOOKMARKS ON BAR: ${looseBookmarks.length}`,
       `# DUMP/TEMP FOLDERS IDENTIFIED: ${dumpFolders.map((f) => f.title).join(', ') || 'None'} (${dumpFolderBookmarks.length} items)`,
       '',
@@ -304,16 +402,19 @@ export function getSmartTreeDSL(nodes: BookmarkTreeNode[], userPrompt = ''): Sma
 
   // --- CASE C: FULL TREE DSL (Default for smaller collections <= 100 bookmarks) ---
   const folderLines = folders
-    .filter((f) => f.id !== '0')
+    .filter((f) => f.id !== '0' && !protectedFolderIds.has(f.id))
     .map((f) => `${f.id}|${f.parentId || '0'}|${f.path}`);
 
-  const bookmarkLines = bookmarks.map((b) => {
-    const safeTitle = (b.title || 'Untitled').replace(/\|/g, '-').slice(0, 50);
-    const safePath = (b.path || 'Bookmarks Bar').replace(/\|/g, '-').slice(0, 40);
-    return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
-  });
+  const bookmarkLines = bookmarks
+    .filter((b) => !isInsideProtected(b))
+    .map((b) => {
+      const safeTitle = (b.title || 'Untitled').replace(/\|/g, '-').slice(0, 50);
+      const safePath = (b.path || 'Bookmarks Bar').replace(/\|/g, '-').slice(0, 40);
+      return `${b.id}|${b.parentId}|${safePath}|${safeTitle}|${b.domain}`;
+    });
 
   const dsl = [
+    ...(protectedDirectiveLine ? [protectedDirectiveLine, ''] : []),
     '# FOLDERS (id|parentId|path)',
     ...folderLines,
     '',
