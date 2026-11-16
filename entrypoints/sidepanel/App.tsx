@@ -1,20 +1,33 @@
-import { Clock, FolderTree, Wand2, Stethoscope, Activity, Trash2 } from 'lucide-react';
-import React, { useState, useEffect, useCallback } from 'react';
+import { Clock, FolderTree, Wand2, Stethoscope, Activity, Trash2, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
 
 import '@/assets/tailwind.css';
 import { browser, type Browser } from 'wxt/browser';
 
-import { AICopilot } from '@/components/AICopilot';
-import { Doctor } from '@/components/Doctor';
-import { Explorer } from '@/components/Explorer';
 import { Header } from '@/components/Header';
-import { Insights } from '@/components/Insights';
 import { PendingSuggestionCard } from '@/components/PendingSuggestionCard';
 import { RecentBookmarks } from '@/components/RecentBookmarks';
-import { RecycleBin } from '@/components/RecycleBin';
-import { SettingsModal } from '@/components/SettingsModal';
 import { Toaster } from '@/components/ui/sonner';
+
+const AICopilot = lazy(() =>
+  import('@/components/AICopilot').then((m) => ({ default: m.AICopilot }))
+);
+const Doctor = lazy(() => import('@/components/Doctor').then((m) => ({ default: m.Doctor })));
+const Explorer = lazy(() => import('@/components/Explorer').then((m) => ({ default: m.Explorer })));
+const Insights = lazy(() => import('@/components/Insights').then((m) => ({ default: m.Insights })));
+const RecycleBin = lazy(() =>
+  import('@/components/RecycleBin').then((m) => ({ default: m.RecycleBin }))
+);
+const SettingsModal = lazy(() =>
+  import('@/components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
+);
+
+const TabFallback = () => (
+  <div className="text-muted-foreground flex flex-1 items-center justify-center py-12">
+    <Loader2 className="size-4 animate-spin" />
+  </div>
+);
 import { useI18n } from '@/lib/i18n';
 import { getBookmarkTree, restoreSnapshot } from '@/services/bookmarks';
 import {
@@ -405,48 +418,62 @@ export const App: React.FC = () => {
         {/* Tab 2: Explorer */}
         {visitedTabs.has('explorer') && (
           <div className={activeTab === 'explorer' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Explorer onBookmarkChanged={refreshState} initialSearchQuery={explorerSearchQuery} />
+            <Suspense fallback={<TabFallback />}>
+              <Explorer onBookmarkChanged={refreshState} initialSearchQuery={explorerSearchQuery} />
+            </Suspense>
           </div>
         )}
 
         {/* Tab 3: Copilot (State preserved across tab navigation) */}
         {visitedTabs.has('copilot') && (
           <div className={activeTab === 'copilot' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <AICopilot onPlanApplied={handlePlanApplied} onOpenSettings={handleOpenSettings} />
+            <Suspense fallback={<TabFallback />}>
+              <AICopilot onPlanApplied={handlePlanApplied} onOpenSettings={handleOpenSettings} />
+            </Suspense>
           </div>
         )}
 
         {/* Tab 4: Doctor (Health checks & subtab state preserved) */}
         {visitedTabs.has('doctor') && (
           <div className={activeTab === 'doctor' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Doctor onFixed={refreshState} initialSubTab={doctorSubTab} />
+            <Suspense fallback={<TabFallback />}>
+              <Doctor onFixed={refreshState} initialSubTab={doctorSubTab} />
+            </Suspense>
           </div>
         )}
 
         {/* Tab 5: Insights */}
         {visitedTabs.has('insights') && (
           <div className={activeTab === 'insights' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <Insights
-              onNavigateToDoctor={handleNavigateToDoctor}
-              onNavigateToCopilot={handleNavigateToCopilot}
-              onNavigateToExplorer={handleNavigateToExplorer}
-            />
+            <Suspense fallback={<TabFallback />}>
+              <Insights
+                onNavigateToDoctor={handleNavigateToDoctor}
+                onNavigateToCopilot={handleNavigateToCopilot}
+                onNavigateToExplorer={handleNavigateToExplorer}
+              />
+            </Suspense>
           </div>
         )}
 
         {/* Tab 6: Recycle Bin */}
         {visitedTabs.has('trash') && (
           <div className={activeTab === 'trash' ? 'flex flex-1 flex-col' : 'hidden'}>
-            <RecycleBin onRestored={refreshState} />
+            <Suspense fallback={<TabFallback />}>
+              <RecycleBin onRestored={refreshState} />
+            </Suspense>
           </div>
         )}
       </main>
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={handleCloseSettings}
-        onSettingsSaved={refreshState}
-      />
+      {isSettingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={handleCloseSettings}
+            onSettingsSaved={refreshState}
+          />
+        </Suspense>
+      )}
 
       <Toaster position="bottom-center" />
     </div>

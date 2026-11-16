@@ -21,7 +21,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
       {/* Brand Identity */}
       <div className="flex items-center gap-2">
         <img
-          src="/logo.png"
+          src="/icon/48.png"
           alt="Bookmark Otter"
           className="size-6 rounded-md object-contain transition-transform duration-150 select-none active:scale-90"
         />
