@@ -8,6 +8,7 @@ import { useTheme } from '@/lib/theme';
 
 interface HeaderProps {
   onOpenSettings: () => void;
+  isSettingsOpen?: boolean;
   trashCount?: number;
   isTrashOpen?: boolean;
   onToggleTrash?: () => void;
@@ -15,6 +16,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
+  isSettingsOpen = false,
   trashCount = 0,
   isTrashOpen = false,
   onToggleTrash,
@@ -106,7 +108,13 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={onOpenSettings}
           title={t('settingsTooltip')}
           aria-label={t('settingsTooltip')}
-          className="group text-muted-foreground hover:text-foreground size-6 cursor-pointer transition-[transform,background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]"
+          aria-pressed={isSettingsOpen}
+          className={cn(
+            'group size-6 cursor-pointer transition-[transform,background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]',
+            isSettingsOpen
+              ? 'bg-primary/15 text-primary'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
         >
           <Settings className="h-3.5 w-3.5 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:rotate-45" />
         </Button>

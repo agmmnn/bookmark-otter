@@ -28,6 +28,28 @@ export function useI18n() {
 
   useEffect(() => {
     getSavedLanguage().then(setLangState);
+
+    const handleStorageChange = (
+      changes: { [key: string]: { newValue?: unknown } },
+      areaName?: string
+    ) => {
+      if (areaName === 'local' && changes.language) {
+        const nextLang = changes.language.newValue;
+        if (nextLang === 'en' || nextLang === 'tr') {
+          setLangState(nextLang);
+        }
+      }
+    };
+
+    if (browser.storage?.onChanged) {
+      browser.storage.onChanged.addListener(handleStorageChange);
+    }
+
+    return () => {
+      if (browser.storage?.onChanged) {
+        browser.storage.onChanged.removeListener(handleStorageChange);
+      }
+    };
   }, []);
 
   const changeLanguage = async (newLang: Language) => {

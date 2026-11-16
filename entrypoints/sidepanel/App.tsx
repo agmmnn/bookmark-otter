@@ -62,13 +62,24 @@ export const App: React.FC = () => {
 
   const handleTabChange = useCallback((tab: ActiveTab) => {
     setIsTrashOpen(false);
+    setIsSettingsOpen(false);
     setActiveTab(tab);
     setVisitedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
   }, []);
 
-  const handleOpenSettings = useCallback(() => setIsSettingsOpen(true), []);
+  const handleOpenSettings = useCallback(() => {
+    setIsTrashOpen(false);
+    setIsSettingsOpen(true);
+  }, []);
+  const handleToggleSettings = useCallback(() => {
+    setIsTrashOpen(false);
+    setIsSettingsOpen((prev) => !prev);
+  }, []);
   const handleCloseSettings = useCallback(() => setIsSettingsOpen(false), []);
-  const handleToggleTrash = useCallback(() => setIsTrashOpen((prev) => !prev), []);
+  const handleToggleTrash = useCallback(() => {
+    setIsSettingsOpen(false);
+    setIsTrashOpen((prev) => !prev);
+  }, []);
   const handleCloseTrash = useCallback(() => setIsTrashOpen(false), []);
 
   const handleNavigateToLibrary = useCallback(
@@ -304,13 +315,16 @@ export const App: React.FC = () => {
     await updateBadgeCount(0);
   };
 
+  const isOverlayOpen = isTrashOpen || isSettingsOpen;
+
   const isTabLabelVisible = (tabKey: ActiveTab) =>
-    navStage === 'wide' || (navStage === 'medium' && activeTab === tabKey && !isTrashOpen);
+    navStage === 'wide' || (navStage === 'medium' && activeTab === tabKey && !isOverlayOpen);
 
   return (
     <div className="bg-background text-foreground selection:bg-primary/20 flex min-h-screen flex-col antialiased">
       <Header
-        onOpenSettings={handleOpenSettings}
+        onOpenSettings={handleToggleSettings}
+        isSettingsOpen={isSettingsOpen}
         trashCount={trashCount}
         isTrashOpen={isTrashOpen}
         onToggleTrash={handleToggleTrash}
@@ -327,13 +341,13 @@ export const App: React.FC = () => {
         {/* 1. Inbox */}
         <button
           role="tab"
-          aria-selected={activeTab === 'inbox' && !isTrashOpen}
+          aria-selected={activeTab === 'inbox' && !isOverlayOpen}
           aria-label={t('tabInbox') || 'Inbox'}
-          data-active={activeTab === 'inbox' && !isTrashOpen}
+          data-active={activeTab === 'inbox' && !isOverlayOpen}
           onClick={() => handleTabChange('inbox')}
           title={t('tabInbox') || 'Inbox'}
           className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'inbox' && !isTrashOpen
+            activeTab === 'inbox' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
@@ -353,13 +367,13 @@ export const App: React.FC = () => {
         {/* 2. Library */}
         <button
           role="tab"
-          aria-selected={activeTab === 'library' && !isTrashOpen}
+          aria-selected={activeTab === 'library' && !isOverlayOpen}
           aria-label={t('tabLibrary') || 'Library'}
-          data-active={activeTab === 'library' && !isTrashOpen}
+          data-active={activeTab === 'library' && !isOverlayOpen}
           onClick={() => handleTabChange('library')}
           title={t('tabLibrary') || 'Library'}
           className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'library' && !isTrashOpen
+            activeTab === 'library' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
@@ -379,13 +393,13 @@ export const App: React.FC = () => {
         {/* 3. Copilot */}
         <button
           role="tab"
-          aria-selected={activeTab === 'copilot' && !isTrashOpen}
+          aria-selected={activeTab === 'copilot' && !isOverlayOpen}
           aria-label={t('tabCopilot') || 'Copilot'}
-          data-active={activeTab === 'copilot' && !isTrashOpen}
+          data-active={activeTab === 'copilot' && !isOverlayOpen}
           onClick={() => handleTabChange('copilot')}
           title={t('tabCopilot') || 'Copilot'}
           className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'copilot' && !isTrashOpen
+            activeTab === 'copilot' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
@@ -405,16 +419,16 @@ export const App: React.FC = () => {
         {/* 4. Doctor */}
         <button
           role="tab"
-          aria-selected={activeTab === 'doctor' && !isTrashOpen}
+          aria-selected={activeTab === 'doctor' && !isOverlayOpen}
           aria-label={t('tabDoctor') || 'Doctor'}
-          data-active={activeTab === 'doctor' && !isTrashOpen}
+          data-active={activeTab === 'doctor' && !isOverlayOpen}
           onClick={() => {
             setDoctorSubTab('overview');
             handleTabChange('doctor');
           }}
           title={t('tabDoctor') || 'Doctor'}
           className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
-            activeTab === 'doctor' && !isTrashOpen
+            activeTab === 'doctor' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
           }`}
@@ -433,7 +447,15 @@ export const App: React.FC = () => {
       </nav>
 
       <main className="relative flex flex-1 flex-col">
-        {isTrashOpen ? (
+        {isSettingsOpen ? (
+          <Suspense fallback={<TabFallback />}>
+            <SettingsModal
+              isOpen={isSettingsOpen}
+              onClose={handleCloseSettings}
+              onSettingsSaved={refreshState}
+            />
+          </Suspense>
+        ) : isTrashOpen ? (
           <Suspense fallback={<TabFallback />}>
             <RecycleBin onRestored={refreshState} onClose={handleCloseTrash} />
           </Suspense>
@@ -499,16 +521,6 @@ export const App: React.FC = () => {
           </>
         )}
       </main>
-
-      {isSettingsOpen && (
-        <Suspense fallback={null}>
-          <SettingsModal
-            isOpen={isSettingsOpen}
-            onClose={handleCloseSettings}
-            onSettingsSaved={refreshState}
-          />
-        </Suspense>
-      )}
 
       <Toaster position="bottom-center" />
     </div>

@@ -2,20 +2,36 @@ import { browser } from 'wxt/browser';
 
 import type { TrashItem, BookmarkTreeNode } from '@/types';
 
+import { getSettings } from './storage';
+
 const STORAGE_KEY = 'recycle_bin_items';
-export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const THIRTY_DAYS_MS = 30 * MS_PER_DAY;
+
+async function getRetentionMs(): Promise<number> {
+  try {
+    const s = await getSettings();
+    const days = s.trashRetentionDays && s.trashRetentionDays > 0 ? s.trashRetentionDays : 30;
+    return days * MS_PER_DAY;
+  } catch {
+    return THIRTY_DAYS_MS;
+  }
+}
 
 /**
- * Fetch all items in the recycle bin, automatically pruning items older than 30 days
+ * Fetch all items in the recycle bin, automatically pruning items older than retention days
  */
 export async function getTrashItems(): Promise<TrashItem[]> {
   try {
-    const data = await browser.storage.local.get(STORAGE_KEY);
+    const [data, retentionMs] = await Promise.all([
+      browser.storage.local.get(STORAGE_KEY),
+      getRetentionMs(),
+    ]);
     const rawItems: TrashItem[] = (data[STORAGE_KEY] as TrashItem[]) || [];
     const now = Date.now();
 
-    // Auto-prune items older than 30 days
-    const validItems = rawItems.filter((item) => now - item.deletedAt <= THIRTY_DAYS_MS);
+    // Auto-prune items older than configured retention period
+    const validItems = rawItems.filter((item) => now - item.deletedAt <= retentionMs);
 
     // If any items were pruned, update storage
     if (validItems.length !== rawItems.length) {
@@ -200,8 +216,8 @@ export async function getTrashCount(): Promise<number> {
 /**
  * Calculate remaining days until permanent deletion
  */
-export function getDaysRemaining(deletedAt: number): number {
+export function getDaysRemaining(deletedAt: number, retentionDays = 30): number {
   const elapsed = Date.now() - deletedAt;
-  const remainingMs = THIRTY_DAYS_MS - elapsed;
-  return Math.max(0, Math.ceil(remainingMs / (1000 * 60 * 60 * 24)));
+  const remainingMs = retentionDays * MS_PER_DAY - elapsed;
+  return Math.max(0, Math.ceil(remainingMs / MS_PER_DAY));
 }

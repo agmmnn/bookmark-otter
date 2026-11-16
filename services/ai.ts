@@ -4,91 +4,103 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createGroq } from '@ai-sdk/groq';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createXai } from '@ai-sdk/xai';
-import { generateObject } from 'ai';
+import { generateObject, generateText } from 'ai';
 import { z } from 'zod';
 
-import type { FlatFolder, PendingSuggestion, ReorgPlan, BookmarkTreeNode } from '@/types';
+import type {
+  AIProvider,
+  AppSettings,
+  FlatFolder,
+  PendingSuggestion,
+  ReorgPlan,
+  BookmarkTreeNode,
+} from '@/types';
 
 import { hydrateReorgPlan } from './bookmarks';
 import { getSettings } from './storage';
+
+function buildProviderModel(provider: AIProvider, apiKey: string, modelName?: string) {
+  switch (provider) {
+    case 'google': {
+      const google = createGoogleGenerativeAI({ apiKey });
+      return google(modelName || 'gemini-3.8-flash');
+    }
+    case 'openai': {
+      const openai = createOpenAI({ apiKey });
+      return openai(modelName || 'gpt-5.6');
+    }
+    case 'anthropic': {
+      const anthropic = createAnthropic({ apiKey });
+      return anthropic(modelName || 'claude-sonnet-5');
+    }
+    case 'xai': {
+      const xai = createXai({ apiKey });
+      return xai(modelName || 'grok-4.5');
+    }
+    case 'groq': {
+      const groq = createGroq({ apiKey });
+      return groq(modelName || 'meta-llama/llama-4-scout-17b-16e-instruct');
+    }
+    case 'deepseek': {
+      const deepseek = createDeepSeek({ apiKey });
+      return deepseek(modelName || 'deepseek-v4-flash');
+    }
+    default: {
+      const google = createGoogleGenerativeAI({ apiKey });
+      return google(modelName || 'gemini-3.8-flash');
+    }
+  }
+}
+
+export async function testProviderConnection(params: {
+  provider: AIProvider;
+  apiKey: string;
+  modelName?: string;
+}): Promise<void> {
+  const key = params.apiKey.trim();
+  if (!key) {
+    throw new Error('API key is empty.');
+  }
+  const model = buildProviderModel(params.provider, key, params.modelName?.trim());
+  await generateText({
+    model,
+    prompt: 'Reply with OK',
+    maxOutputTokens: 5,
+  });
+}
+
+function resolveAiTargetLanguage(settings: AppSettings, mode: 'request' | 'page'): string {
+  if (settings.aiLanguage === 'en') return 'English';
+  if (settings.aiLanguage === 'tr') return 'Turkish';
+  return mode === 'request'
+    ? "same language as the user's request (defaulting to the bookmark titles' language)"
+    : "same language as the bookmark title/page content (defaulting to the user's interface language)";
+}
 
 export function getModel() {
   return async () => {
     const settings = await getSettings();
     const isTr = settings.language === 'tr';
 
-    switch (settings.aiProvider) {
-      case 'google': {
-        if (!settings.geminiApiKey) {
-          throw new Error(
-            isTr
-              ? 'Lütfen Ayarlar bölümünden Gemini API anahtarınızı girin.'
-              : 'Please enter your Gemini API Key in Settings.'
-          );
-        }
-        const google = createGoogleGenerativeAI({ apiKey: settings.geminiApiKey });
-        return google(settings.modelName || 'gemini-3.8-flash');
-      }
-      case 'openai': {
-        if (!settings.openaiApiKey) {
-          throw new Error(
-            isTr
-              ? 'Lütfen Ayarlar bölümünden OpenAI API anahtarınızı girin.'
-              : 'Please enter your OpenAI API Key in Settings.'
-          );
-        }
-        const openai = createOpenAI({ apiKey: settings.openaiApiKey });
-        return openai(settings.modelName || 'gpt-5.6');
-      }
-      case 'anthropic': {
-        if (!settings.anthropicApiKey) {
-          throw new Error(
-            isTr
-              ? 'Lütfen Ayarlar bölümünden Anthropic API anahtarınızı girin.'
-              : 'Please enter your Anthropic API Key in Settings.'
-          );
-        }
-        const anthropic = createAnthropic({ apiKey: settings.anthropicApiKey });
-        return anthropic(settings.modelName || 'claude-sonnet-5');
-      }
-      case 'xai': {
-        if (!settings.xaiApiKey) {
-          throw new Error(
-            isTr
-              ? 'Lütfen Ayarlar bölümünden xAI API anahtarınızı girin.'
-              : 'Please enter your xAI API Key in Settings.'
-          );
-        }
-        const xai = createXai({ apiKey: settings.xaiApiKey });
-        return xai(settings.modelName || 'grok-4.5');
-      }
-      case 'groq': {
-        if (!settings.groqApiKey) {
-          throw new Error(
-            isTr
-              ? 'Lütfen Ayarlar bölümünden Groq API anahtarınızı girin.'
-              : 'Please enter your Groq API Key in Settings.'
-          );
-        }
-        const groq = createGroq({ apiKey: settings.groqApiKey });
-        return groq(settings.modelName || 'meta-llama/llama-4-scout-17b-16e-instruct');
-      }
-      case 'deepseek': {
-        if (!settings.deepseekApiKey) {
-          throw new Error(
-            isTr
-              ? 'Lütfen Ayarlar bölümünden DeepSeek API anahtarınızı girin.'
-              : 'Please enter your DeepSeek API Key in Settings.'
-          );
-        }
-        const deepseek = createDeepSeek({ apiKey: settings.deepseekApiKey });
-        return deepseek(settings.modelName || 'deepseek-v4-flash');
-      }
-      default: {
-        const google = createGoogleGenerativeAI({ apiKey: settings.geminiApiKey });
-        return google(settings.modelName || 'gemini-3.8-flash');
-      }
+    const keyMap: Record<AIProvider, string | undefined> = {
+      google: settings.geminiApiKey,
+      openai: settings.openaiApiKey,
+      anthropic: settings.anthropicApiKey,
+      xai: settings.xaiApiKey,
+      groq: settings.groqApiKey,
+      deepseek: settings.deepseekApiKey,
+    };
+
+    const apiKey = keyMap[settings.aiProvider]?.trim();
+    if (!apiKey) {
+      throw new Error(
+        isTr
+          ? 'Lütfen Ayarlar bölümünden API anahtarınızı girin.'
+          : 'Please enter your API Key in Settings.'
+      );
     }
+
+    return buildProviderModel(settings.aiProvider, apiKey, settings.modelName);
   };
 }
 
@@ -111,7 +123,7 @@ export async function suggestForNewBookmark(params: {
   const modelFn = getModel();
   const model = await modelFn();
   const settings = await getSettings();
-  const targetLang = settings.language === 'tr' ? 'Turkish' : 'English';
+  const targetLang = resolveAiTargetLanguage(settings, 'page');
 
   const folderList = params.folders
     .filter((f) => f.id !== '0')
@@ -181,7 +193,7 @@ export async function generateReorganizationPlan(params: {
   const modelFn = getModel();
   const model = await modelFn();
   const settings = await getSettings();
-  const targetLang = settings.language === 'tr' ? 'Turkish' : 'English';
+  const targetLang = resolveAiTargetLanguage(settings, 'request');
 
   const system = `You are "Bookmark Otter", an elite, design-conscious bookmark organization engine.
 Your mission is to take the user's natural language reorganization request and construct a safe, pragmatic, and executable Action Plan.
@@ -218,7 +230,7 @@ Your mission is to take the user's natural language reorganization request and c
    - Mirror the user's existing naming and emoji conventions (e.g. "💻 Development", "📚 Languages & Dictionaries", "🌐 Web & Tools").
 
 8. SUMMARY & LANGUAGE:
-   - Write the "summary" in ${targetLang} (matching the user's interface language).
+   - Write the "summary" and action "reason" fields in ${targetLang}.
    - The summary must be a concise, clear 1-2 sentence overview of planned actions.`;
 
   const prompt = `[USER REQUEST]

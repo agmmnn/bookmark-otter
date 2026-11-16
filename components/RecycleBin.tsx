@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
 import { formatFolderTitle, formatShortFolderPath } from '@/lib/utils';
+import { getSettings } from '@/services/storage';
 import {
   getTrashItems,
   restoreFromTrash,
@@ -25,6 +26,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
 }) {
   const { t, lang } = useI18n();
   const [items, setItems] = useState<TrashItem[]>([]);
+  const [retentionDays, setRetentionDays] = useState(30);
   const [isLoading, setIsLoading] = useState(true);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [showConfirmEmpty, setShowConfirmEmpty] = useState(false);
@@ -33,8 +35,11 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
   const loadItems = async () => {
     setIsLoading(true);
     try {
-      const trash = await getTrashItems();
+      const [trash, settings] = await Promise.all([getTrashItems(), getSettings()]);
       setItems(trash);
+      if (settings.trashRetentionDays && settings.trashRetentionDays > 0) {
+        setRetentionDays(settings.trashRetentionDays);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -187,7 +192,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
       ) : (
         <div className="space-y-2">
           {items.map((item) => {
-            const daysLeft = getDaysRemaining(item.deletedAt);
+            const daysLeft = getDaysRemaining(item.deletedAt, retentionDays);
             const isFolder = item.isFolder;
 
             return (

@@ -18,6 +18,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   deepseekApiKey: '',
   modelName: 'gemini-3.8-flash',
   language: 'en',
+  aiLanguage: 'auto',
+  trashRetentionDays: 30,
 };
 
 let cliSettingsOverride: AppSettings | null = null;
@@ -57,6 +59,13 @@ export async function getSettings(): Promise<AppSettings> {
 export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
   const current = await getSettings();
   await browser.storage.local.set({ settings: { ...current, ...settings } });
+}
+
+export async function clearAllLocalData(): Promise<void> {
+  if (typeof browser !== 'undefined' && browser.storage?.local?.clear) {
+    await browser.storage.local.clear();
+  }
+  await updateBadgeCount(0);
 }
 
 export function hasConfiguredKey(settings: AppSettings): boolean {

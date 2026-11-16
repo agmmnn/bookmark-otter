@@ -10,6 +10,8 @@ export interface AppSettings {
   deepseekApiKey?: string;
   modelName: string;
   language: 'en' | 'tr';
+  aiLanguage?: 'auto' | 'en' | 'tr';
+  trashRetentionDays?: number;
 }
 
 export interface CompactBookmark {

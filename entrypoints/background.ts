@@ -1,7 +1,11 @@
 import { browser } from 'wxt/browser';
 
 import { runMultiStepAgentHarness } from '@/services/agentHarness';
-import { generateReorganizationPlan, suggestForNewBookmark } from '@/services/ai';
+import {
+  generateReorganizationPlan,
+  suggestForNewBookmark,
+  testProviderConnection,
+} from '@/services/ai';
 import type { GeneratePlanRequest, SuggestBookmarkRequest } from '@/services/aiClient';
 import { getBookmarkTree, getAllFolders } from '@/services/bookmarks';
 import {
@@ -166,9 +170,20 @@ export default defineBackground(() => {
     }
   });
 
-  // 3. Handle on-demand single-bookmark AI suggestion requests from Sidepanel
+  // 3. Handle on-demand single-bookmark AI suggestion & API test requests from Sidepanel
   browser.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
-    if (!message || message.type !== 'AI_SUGGEST_BOOKMARK') return false;
+    if (!message) return false;
+
+    if (message.type === 'AI_TEST_CONNECTION') {
+      testProviderConnection(message.payload)
+        .then(() => sendResponse({ ok: true }))
+        .catch((err: any) =>
+          sendResponse({ ok: false, error: err?.message || 'Connection test failed.' })
+        );
+      return true;
+    }
+
+    if (message.type !== 'AI_SUGGEST_BOOKMARK') return false;
 
     const payload = message.payload as SuggestBookmarkRequest;
     suggestForNewBookmark(payload)

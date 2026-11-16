@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 
 import type {
   AgentProgress,
+  AIProvider,
   BookmarkTreeNode,
   FlatFolder,
   PendingSuggestion,
@@ -75,6 +76,27 @@ export async function suggestForNewBookmarkViaBackground(
     throw new Error(response.error || 'Could not generate suggestion.');
   }
   return response.suggestion;
+}
+
+/**
+ * Tests the provider API key + selected model directly via the background service worker.
+ */
+export async function testApiConnectionViaBackground(params: {
+  provider: AIProvider;
+  apiKey: string;
+  modelName?: string;
+}): Promise<void> {
+  const response = (await browser.runtime.sendMessage({
+    type: 'AI_TEST_CONNECTION',
+    payload: params,
+  })) as { ok: true } | { ok: false; error: string } | undefined;
+
+  if (!response) {
+    throw new Error('No response from background AI service.');
+  }
+  if (!response.ok) {
+    throw new Error(response.error || 'API key validation failed.');
+  }
 }
 
 /**
