@@ -3,6 +3,15 @@ import path from 'path';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'wxt';
 
+const AI_HOST_PERMISSIONS = [
+  'https://generativelanguage.googleapis.com/*',
+  'https://api.openai.com/*',
+  'https://api.anthropic.com/*',
+  'https://api.x.ai/*',
+  'https://api.groq.com/*',
+  'https://api.deepseek.com/*',
+];
+
 // See https://wxt.dev/api/reference/wxt/interfaces/inlineconfig.html
 export default defineConfig({
   modules: ['@wxt-dev/module-react', '@wxt-dev/i18n/module'],
@@ -17,12 +26,15 @@ export default defineConfig({
       },
     },
   }),
-  manifest: {
+  manifest: ({ manifestVersion }) => ({
     name: '__MSG_extName__',
     description: '__MSG_extDescription__',
     default_locale: 'en',
     permissions: ['bookmarks', 'storage', 'sidePanel', 'tabs', 'scripting'],
-    host_permissions: ['<all_urls>'],
+    host_permissions: AI_HOST_PERMISSIONS,
+    ...(manifestVersion === 3
+      ? { optional_host_permissions: ['http://*/*', 'https://*/*'] }
+      : { optional_permissions: ['http://*/*', 'https://*/*'] }),
     action: {
       default_title: '__MSG_extName__',
       default_icon: {
@@ -32,5 +44,5 @@ export default defineConfig({
         '128': 'icon/128.png',
       },
     },
-  },
+  }),
 });

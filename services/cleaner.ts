@@ -189,9 +189,9 @@ export function findEmptyFolders(tree: BookmarkTreeNode[]): EmptyFolder[] {
 }
 
 /**
- * Test a single URL's HTTP reachability from the sidepanel
+ * Performs the actual HTTP HEAD (with GET fallback) health check in the current context.
  */
-export async function testUrlHealth(
+export async function checkUrlDirect(
   url: string,
   timeoutMs = 6000,
   signal?: AbortSignal
@@ -202,30 +202,38 @@ export async function testUrlHealth(
   const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
 
   try {
-    // Attempt HEAD request first for speed and bandwidth efficiency
-    let res: Response;
+    let res: Response | null = null;
     try {
-      res = await fetch(url, {
+      const headRes = await fetch(url, {
         method: 'HEAD',
         signal: combinedSignal,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
+        redirect: 'follow',
       });
+      // Many servers return 400/403/405/501 for HEAD while allowing normal GET
+      if (
+        headRes.status !== 400 &&
+        headRes.status !== 403 &&
+        headRes.status !== 405 &&
+        headRes.status !== 501
+      ) {
+        res = headRes;
+      }
     } catch (headErr: any) {
-      // Some servers reject HEAD with 405 or cors, try lightweight GET
       if (combinedSignal.aborted) throw headErr;
+    }
+
+    if (!res) {
       res = await fetch(url, {
         method: 'GET',
         signal: combinedSignal,
+        redirect: 'follow',
         headers: {
-          Range: 'bytes=0-1024', // Request first 1KB only
+          Range: 'bytes=0-1024',
         },
       });
-    } finally {
-      clearTimeout(timeoutId);
     }
+
+    clearTimeout(timeoutId);
 
     const code = res.status;
     if (code >= 200 && code < 400) {
@@ -254,6 +262,46 @@ export async function testUrlHealth(
         : err.message || 'Network / DNS Unreachable';
     return { status: 'broken', error: message };
   }
+}
+
+/**
+ * Test a single URL's HTTP reachability, preferring background service-worker fetch
+ * so granted optional host permissions bypass sidepanel CORS restrictions.
+ */
+export async function testUrlHealth(
+  url: string,
+  timeoutMs = 6000,
+  signal?: AbortSignal
+): Promise<{ status: 'healthy' | 'broken' | 'protected'; statusCode?: number; error?: string }> {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+
+  if (typeof browser !== 'undefined' && browser.runtime?.sendMessage) {
+    try {
+      const response = (await browser.runtime.sendMessage({
+        type: 'CHECK_URL_HEALTH',
+        payload: { url, timeoutMs },
+      })) as
+        | {
+            ok: true;
+            result: {
+              status: 'healthy' | 'broken' | 'protected';
+              statusCode?: number;
+              error?: string;
+            };
+          }
+        | { ok: false }
+        | undefined;
+      if (response && response.ok) {
+        return response.result;
+      }
+    } catch {
+      // Fall back to direct fetch if background messaging isn't available
+    }
+  }
+
+  return checkUrlDirect(url, timeoutMs, signal);
 }
 
 /**

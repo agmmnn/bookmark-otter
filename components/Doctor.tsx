@@ -64,6 +64,7 @@ import {
   verifyHttpsSupportBatch,
 } from '@/services/cleaner';
 import { calculateInsights } from '@/services/insights';
+import { hasWebScanPermission, requestWebScanPermission } from '@/services/permissions';
 import { restoreRecentTrashItems } from '@/services/trash';
 import type {
   DuplicateGroup,
@@ -191,7 +192,9 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
   const [httpSearchQuery, setHttpSearchQuery] = useState('');
   const [visibleHttpCount, setVisibleHttpCount] = useState(30);
 
-  // Broken link scanner state
+  // Broken link scanner & optional host permission state
+  const [hasScanPermission, setHasScanPermission] = useState<boolean>(false);
+  const [scanPermissionDenied, setScanPermissionDenied] = useState<boolean>(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, currentUrl: '' });
   const [brokenLinks, setBrokenLinks] = useState<BrokenLinkResult[]>([]);
@@ -340,11 +343,25 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
   useEffect(() => {
     loadData();
+    hasWebScanPermission().then((granted) => setHasScanPermission(granted));
+
+    const onPermChange = () => {
+      hasWebScanPermission().then((granted) => {
+        setHasScanPermission(granted);
+        if (granted) setScanPermissionDenied(false);
+      });
+    };
+
+    browser.permissions?.onAdded?.addListener?.(onPermChange);
+    browser.permissions?.onRemoved?.addListener?.(onPermChange);
+
     return () => {
       // Abort any in-flight link scanner on unmount
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      browser.permissions?.onAdded?.removeListener?.(onPermChange);
+      browser.permissions?.onRemoved?.removeListener?.(onPermChange);
     };
   }, [loadData]);
 
@@ -752,6 +769,57 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
       onFixed?.();
     });
     if (onFixed) onFixed();
+  };
+
+  const handleVerifyHttpsClick = () => {
+    if (hasScanPermission) {
+      handleVerifyHttpsSupport();
+      return;
+    }
+    // Call requestWebScanPermission synchronously inside click handler (no prior await)
+    requestWebScanPermission()
+      .then((granted) => {
+        setHasScanPermission(granted);
+        setScanPermissionDenied(!granted);
+        if (granted) {
+          handleVerifyHttpsSupport();
+        }
+      })
+      .catch(() => setScanPermissionDenied(true));
+  };
+
+  const handleUpgradeAllHttpsClick = () => {
+    if (hasScanPermission) {
+      handleUpgradeAllHttps();
+      return;
+    }
+    // Call requestWebScanPermission synchronously inside click handler (no prior await)
+    requestWebScanPermission()
+      .then((granted) => {
+        setHasScanPermission(granted);
+        setScanPermissionDenied(!granted);
+        if (granted) {
+          handleUpgradeAllHttps();
+        }
+      })
+      .catch(() => setScanPermissionDenied(true));
+  };
+
+  const handleScanLinksClick = () => {
+    if (hasScanPermission) {
+      startScan();
+      return;
+    }
+    // Call requestWebScanPermission synchronously inside click handler (no prior await)
+    requestWebScanPermission()
+      .then((granted) => {
+        setHasScanPermission(granted);
+        setScanPermissionDenied(!granted);
+        if (granted) {
+          startScan();
+        }
+      })
+      .catch(() => setScanPermissionDenied(true));
   };
 
   // --- Broken Links Actions ---
@@ -2850,7 +2918,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={handleVerifyHttpsSupport}
+                    onClick={handleVerifyHttpsClick}
                     disabled={isVerifyingHttps || isUpgradingHttps}
                     className="h-7 cursor-pointer border-amber-500/30 px-2.5 text-xs font-medium text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
                     title={
@@ -2888,7 +2956,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
                   <Button
                     size="sm"
-                    onClick={handleUpgradeAllHttps}
+                    onClick={handleUpgradeAllHttpsClick}
                     disabled={
                       isUpgradingHttps ||
                       isVerifyingHttps ||
@@ -2921,6 +2989,28 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </div>
               )}
             </div>
+
+            {/* Brief Permission Explanation / Denied Warning for HTTP verification */}
+            {!hasScanPermission && insecureBookmarks.length > 0 && (
+              <div
+                className={`mt-2.5 flex items-start gap-2 rounded-md border px-2.5 py-2 text-[10.5px] ${
+                  scanPermissionDenied
+                    ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                    : 'bg-background/60 text-muted-foreground border-amber-500/25'
+                }`}
+              >
+                <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                <span>
+                  {scanPermissionDenied
+                    ? lang === 'tr'
+                      ? 'İzin gerekli: HTTPS doğrulaması için site erişim izni verilmedi. Satır içi tekli yükseltmeleri hâlâ kullanabilirsiniz.'
+                      : 'Permission required: Site access was denied for HTTPS verification. Single-row upgrades still work.'
+                    : lang === 'tr'
+                      ? 'HTTPS desteğini test etmek için siteleri ziyaret etmemiz gerekiyor, sayfa içeriği saklanmaz.'
+                      : 'To verify HTTPS support, we need permission to visit bookmarked sites. Page content is never stored.'}
+                </span>
+              </div>
+            )}
 
             {/* Search / Filter input for long HTTP lists */}
             {insecureBookmarks.length > 8 && (
@@ -3154,13 +3244,17 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <Button
                   size="sm"
                   variant={hasScannedBroken ? 'outline' : 'default'}
-                  onClick={startScan}
+                  onClick={handleScanLinksClick}
                   className="h-7 cursor-pointer px-2.5 text-xs font-medium active:scale-[0.97]"
                 >
                   <Play className="mr-1 size-3 fill-current" />
-                  {hasScannedBroken
-                    ? t('reScanBtn') || 'Re-Scan All'
-                    : t('scanAllLinksBtn') || 'Scan All Links'}
+                  {!hasScanPermission
+                    ? lang === 'tr'
+                      ? 'İzin Ver ve Tara'
+                      : 'Allow & Scan'
+                    : hasScannedBroken
+                      ? t('reScanBtn') || 'Re-Scan All'
+                      : t('scanAllLinksBtn') || 'Scan All Links'}
                 </Button>
               )}
             </div>
@@ -3345,8 +3439,46 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
             </div>
           )}
 
-          {/* State 1: Prompt to Scan */}
-          {!hasScannedBroken ? (
+          {/* State 1: Permission Prompt or Initial Prompt to Scan */}
+          {!hasScanPermission ? (
+            <div
+              className={`flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-9 text-center ${
+                scanPermissionDenied
+                  ? 'border-rose-500/40 bg-rose-500/5'
+                  : 'border-border/60 bg-muted/10'
+              }`}
+            >
+              <ShieldAlert
+                className={`mb-2 size-7 ${
+                  scanPermissionDenied ? 'text-rose-500' : 'text-amber-500'
+                }`}
+              />
+              <h4 className="text-foreground text-xs font-semibold">
+                {scanPermissionDenied
+                  ? lang === 'tr'
+                    ? 'İzin gerekli — tarama başlatılamadı'
+                    : 'Permission required — scan could not start'
+                  : lang === 'tr'
+                    ? 'Link taraması için izin gerekiyor'
+                    : 'Permission required for link checks'}
+              </h4>
+              <p className="text-muted-foreground mt-1 max-w-xs text-[11px] leading-relaxed">
+                {lang === 'tr'
+                  ? 'Linkleri kontrol etmek için siteleri ziyaret etmemiz gerekiyor, sayfa içeriği saklanmaz. Mükerrer, takipçi, benzer ve boş klasör araçları izinsiz çalışmaya devam eder.'
+                  : 'To check links, we need permission to visit bookmarked sites. Page content is never stored. Duplicates, trackers, similar, and empty folders still work without this permission.'}
+              </p>
+              <Button
+                size="sm"
+                onClick={handleScanLinksClick}
+                className="mt-3 h-7 cursor-pointer gap-1.5 px-3 text-xs font-medium active:scale-[0.97]"
+              >
+                <ShieldCheck className="size-3.5" />
+                <span>
+                  {lang === 'tr' ? 'İzin Ver ve Linkleri Tara' : 'Grant Access & Scan Links'}
+                </span>
+              </Button>
+            </div>
+          ) : !hasScannedBroken ? (
             <div className="border-border/60 bg-muted/10 flex flex-col items-center justify-center rounded-xl border border-dashed p-6 py-10 text-center">
               <Stethoscope className="text-muted-foreground/50 mb-2 size-8" />
               <p className="text-muted-foreground max-w-xs text-xs">

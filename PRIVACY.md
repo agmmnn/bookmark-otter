@@ -20,8 +20,8 @@ We have **no access** to any of this stored data, and we do not collect telemetr
 Bookmark Otter does not transmit any data until you actively enable and trigger an AI feature (such as Inbox **AI Organize** or **Copilot**) using your own API key:
 
 - **Recipient:** Requests are sent directly from your browser extension to the AI provider endpoint you selected in Settings (e.g., Google Gemini, OpenAI, Anthropic Claude, xAI Grok, Groq, or DeepSeek).
-- **What is sent:** Your prompt instructions along with bookmark metadata (`title`, `url` / `domain`, and `folder path`). When starring an open web page, only its page title and brief `<meta name="description">` / `<h1>` text may be included to suggest a cleaner title and folder.
-- **What is NOT sent:** Full web page body contents, browsing history outside your bookmarks, cookies, form inputs, or passwords are never collected or transmitted.
+- **What is sent:** Your prompt instructions along with bookmark metadata (`title`, `url` / `domain`, and `folder path`). Only if you have additionally granted optional site access for link checking, a new bookmarked tab's `<meta name="description">` and `<h1>` may also be read to refine suggestions.
+- **What is NOT sent:** Full web page body contents, browsing history outside your bookmarks, cookies, form inputs, or passwords are never stored, collected, or transmitted.
 
 Your interactions with your chosen AI provider are governed by that provider's own privacy policy and API terms.
 
@@ -35,9 +35,10 @@ Your interactions with your chosen AI provider are governed by that provider's o
 - **`bookmarks`**: Read, create, move, rename, and delete bookmarks and folders when you apply changes.
 - **`storage`**: Store API keys, preferences, undo snapshots, and Recycle Bin backups locally on your device.
 - **`sidePanel`**: Render the Bookmark Otter workspace inside Chrome's Side Panel.
-- **`tabs`**: Open selected bookmarks in new tabs and identify the currently starred active tab.
-- **`scripting`**: Read brief `<meta>` / `<h1>` title context from the active tab solely when you bookmark a page for AI title suggestion.
-- **`host_permissions` (`<all_urls>`)**: Allow the user-triggered 404 Link Checker and HTTPS Upgrader to verify arbitrary bookmarked domains directly from your browser.
+- **`tabs`**: Open selected bookmarks in new tabs and match the active tab URL when suggesting a title for a newly bookmarked page.
+- **`scripting`**: Used only if you have opted into optional web access to read brief `<meta>` / `<h1>` context on a newly bookmarked tab. Page contents are never stored.
+- **`host_permissions` (AI API endpoints only)**: Allows direct BYOK requests to your selected AI provider (`generativelanguage.googleapis.com`, `api.openai.com`, `api.anthropic.com`, `api.x.ai`, `api.groq.com`, `api.deepseek.com`).
+- **`optional_host_permissions` (`http://*/*`, `https://*/*`)**: Requested on demand only when you click **Allow & Scan** in Doctor (`404 Links` or `HTTP` HTTPS verification). Can be revoked anytime in **Settings → Data → Revoke**.
 
 ## 5. Data Deletion & Control
 

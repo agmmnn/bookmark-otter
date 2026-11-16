@@ -8,6 +8,8 @@ import {
 } from '@/services/ai';
 import type { GeneratePlanRequest, SuggestBookmarkRequest } from '@/services/aiClient';
 import { getBookmarkTree, getAllFolders } from '@/services/bookmarks';
+import { checkUrlDirect } from '@/services/cleaner';
+import { hasWebScanPermission } from '@/services/permissions';
 import {
   getSettings,
   hasConfiguredKey,
@@ -64,30 +66,33 @@ export default defineBackground(() => {
         return;
       }
 
-      // Extract page metadata if the bookmarked page is in the active tab
+      // Extract brief page metadata ONLY when the user has already granted optional host access.
+      // Otherwise AI works seamlessly using bookmark title + URL alone.
       let pageMeta: { description?: string; h1?: string } | undefined;
-      const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (await hasWebScanPermission()) {
+        const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
 
-      if (activeTab && activeTab.id && activeTab.url === bookmark.url) {
-        try {
-          const injection = await browser.scripting.executeScript({
-            target: { tabId: activeTab.id },
-            func: () => {
-              const desc =
-                document.querySelector('meta[name="description"]')?.getAttribute('content') ||
-                document
-                  .querySelector('meta[property="og:description"]')
-                  ?.getAttribute('content') ||
-                '';
-              const h1 = document.querySelector('h1')?.innerText?.trim() || '';
-              return { description: desc.slice(0, 300), h1: h1.slice(0, 150) };
-            },
-          });
-          if (injection && injection[0]?.result) {
-            pageMeta = injection[0].result;
+        if (activeTab && activeTab.id && activeTab.url === bookmark.url) {
+          try {
+            const injection = await browser.scripting.executeScript({
+              target: { tabId: activeTab.id },
+              func: () => {
+                const desc =
+                  document.querySelector('meta[name="description"]')?.getAttribute('content') ||
+                  document
+                    .querySelector('meta[property="og:description"]')
+                    ?.getAttribute('content') ||
+                  '';
+                const h1 = document.querySelector('h1')?.innerText?.trim() || '';
+                return { description: desc.slice(0, 300), h1: h1.slice(0, 150) };
+              },
+            });
+            if (injection && injection[0]?.result) {
+              pageMeta = injection[0].result;
+            }
+          } catch {
+            // Script injection could fail on restricted pages, ignore gracefully
           }
-        } catch {
-          // Script injection could fail on restricted pages, ignore gracefully
         }
       }
 
@@ -179,6 +184,16 @@ export default defineBackground(() => {
         .then(() => sendResponse({ ok: true }))
         .catch((err: any) =>
           sendResponse({ ok: false, error: err?.message || 'Connection test failed.' })
+        );
+      return true;
+    }
+
+    if (message.type === 'CHECK_URL_HEALTH') {
+      const { url, timeoutMs } = message.payload as { url: string; timeoutMs?: number };
+      checkUrlDirect(url, timeoutMs)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((err: any) =>
+          sendResponse({ ok: false, error: err?.message || 'URL check failed.' })
         );
       return true;
     }

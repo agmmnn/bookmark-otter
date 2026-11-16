@@ -38,6 +38,7 @@ import {
 import { useI18n } from '@/lib/i18n';
 import { useTheme, type Theme } from '@/lib/theme';
 import { testApiConnectionViaBackground } from '@/services/aiClient';
+import { hasWebScanPermission, revokeWebScanPermission } from '@/services/permissions';
 import { clearAllLocalData, getSettings, saveSettings } from '@/services/storage';
 import type { AIProvider, AppSettings } from '@/types';
 
@@ -205,11 +206,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     message?: string;
   }>({ status: 'idle' });
 
-  // Clear local data confirmation
+  // Clear local data confirmation & optional site scan permission state
   const [confirmClearData, setConfirmClearData] = useState(false);
+  const [hasScanPermission, setHasScanPermission] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
+      hasWebScanPermission().then(setHasScanPermission);
       getSettings().then((s) => {
         const activeProvider = s.aiProvider || 'google';
         const defaultForProvider =
@@ -769,8 +772,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
             <p className="text-muted-foreground/80">
               {lang === 'tr'
-                ? 'AI isteklerinde yalnızca yer imi başlığı, URL ve klasör adları paylaşılır — tam sayfa içeriği gönderilmez.'
-                : 'Only bookmark titles, URLs, and folder names are shared — full web page content is never sent.'}
+                ? 'AI isteklerinde yalnızca yer imi başlığı, URL ve klasör adları paylaşılır — sayfa içeriği saklanmaz.'
+                : 'Only bookmark titles, URLs, and folder names are shared — page content is never stored.'}
             </p>
           </div>
         </div>
@@ -894,6 +897,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        {/* Optional Web Link-Checking Permission */}
+        <div className="border-border/40 bg-muted/20 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2">
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-foreground text-[10.5px] font-medium">
+              {lang === 'tr'
+                ? 'Site tarama izni (404 / HTTPS)'
+                : 'Site access permission (404 / HTTPS)'}
+            </p>
+            <p className="text-muted-foreground text-[9.5px]">
+              {hasScanPermission
+                ? lang === 'tr'
+                  ? 'Verildi — yalnızca siz tarama başlattığınızda kullanılır'
+                  : 'Granted — used only when you run a link check'
+                : lang === 'tr'
+                  ? 'Henüz verilmedi (Doctor taramasında istenir)'
+                  : 'Not granted yet (requested on demand in Doctor)'}
+            </p>
+          </div>
+          {hasScanPermission && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={async () => {
+                const removed = await revokeWebScanPermission();
+                if (removed) {
+                  setHasScanPermission(false);
+                  toast.success(
+                    lang === 'tr' ? 'Site tarama izni kaldırıldı' : 'Site access permission revoked'
+                  );
+                }
+              }}
+              className="h-6 shrink-0 cursor-pointer px-2 text-[10px]"
+            >
+              {lang === 'tr' ? 'İzni kaldır' : 'Revoke'}
+            </Button>
+          )}
         </div>
 
         {/* Import / Export Settings */}
