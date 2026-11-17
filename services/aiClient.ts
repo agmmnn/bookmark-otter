@@ -29,6 +29,7 @@ export interface GeneratePlanRequest {
 }
 
 export type AiPortMessage =
+  | { type: 'KEEPALIVE' }
   | { type: 'PROGRESS'; progress: AgentProgress }
   | { type: 'RESULT'; plan: ReorgPlan }
   | { type: 'ERROR'; error: string; checkpoint?: { completed: number; total: number } };
@@ -145,6 +146,7 @@ export function generatePlanViaBackground(
     port.onMessage.addListener((rawMsg: unknown) => {
       const msg = rawMsg as AiPortMessage;
       if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'KEEPALIVE') return;
 
       if (msg.type === 'PROGRESS') {
         onProgress?.(msg.progress);

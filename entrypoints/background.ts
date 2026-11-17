@@ -144,9 +144,10 @@ export default defineBackground(() => {
         .catch(() => {
           // Sidepanel might not be open right now, which is normal
         });
-    } catch (err) {
+    } catch (err: any) {
       inFlightBookmarkIds.delete(id);
-      console.error('Failed to generate AI suggestion for new bookmark:', err);
+      // Expected API/network errors (quota, invalid key, offline) must not pollute chrome://extensions > Errors
+      console.warn('Could not generate AI suggestion for new bookmark:', err?.message || err);
     }
   });
 
@@ -215,8 +216,17 @@ export default defineBackground(() => {
     if (port.name !== 'ai-copilot-plan') return;
 
     let isDisconnected = false;
+    let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+    const stopKeepAlive = () => {
+      if (keepAliveTimer !== null) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+    };
+
     port.onDisconnect.addListener(() => {
       isDisconnected = true;
+      stopKeepAlive();
     });
 
     const safePost = (msg: any) => {
@@ -225,12 +235,17 @@ export default defineBackground(() => {
         port.postMessage(msg);
       } catch {
         isDisconnected = true;
+        stopKeepAlive();
       }
     };
 
     port.onMessage.addListener(async (msg: any) => {
       if (!msg || msg.type !== 'START_PLAN') return;
       const payload = msg.payload as GeneratePlanRequest;
+
+      stopKeepAlive();
+      // Prevent MV3 30s service-worker idle termination during long LLM calls
+      keepAliveTimer = setInterval(() => safePost({ type: 'KEEPALIVE' }), 15000);
 
       try {
         const plan = payload.useHarness
@@ -255,6 +270,8 @@ export default defineBackground(() => {
           error: err?.message || 'Plan generation failed.',
           checkpoint: err?.checkpoint,
         });
+      } finally {
+        stopKeepAlive();
       }
     });
   });

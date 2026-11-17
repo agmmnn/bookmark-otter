@@ -82,7 +82,7 @@ interface AICopilotProps {
   onOpenSettings: () => void;
 }
 
-type CopilotErrorKind = 'quota' | 'auth' | 'network' | 'validation' | 'other';
+type CopilotErrorKind = 'quota' | 'overload' | 'auth' | 'network' | 'validation' | 'other';
 
 interface CopilotErrorState {
   kind: CopilotErrorKind;
@@ -252,6 +252,23 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
           lang === 'tr'
             ? 'Kullanım sınırına ulaşıldı. Başka bir model seçebilir, sağlayıcı değiştirebilir veya birazdan tekrar deneyebilirsin.'
             : 'API usage limit reached. Switch model, change provider, or retry shortly.',
+        rawMessage: msg,
+        checkpoint,
+      };
+    }
+
+    if (
+      /high demand|spikes in demand|overloaded|capacity|temporarily unavailable|too many requests|503/i.test(
+        lower
+      )
+    ) {
+      return {
+        kind: 'overload',
+        title: lang === 'tr' ? 'Model şu anda çok yoğun' : 'Model experiencing high demand',
+        description:
+          lang === 'tr'
+            ? 'Yoğunluk genellikle geçicidir. Tekrar deneyebilir veya daha hızlı yanıt için başka bir model seçebilirsiniz.'
+            : 'Traffic spikes are temporary. Retry shortly or switch to another model.',
         rawMessage: msg,
         checkpoint,
       };
@@ -680,7 +697,8 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
       if (err?.name === 'AbortError') {
         toast.info(lang === 'tr' ? 'Plan oluşturma durduruldu' : 'Plan generation stopped');
       } else {
-        console.error('Plan generation failed:', err);
+        // Expected external API/network responses should not trigger chrome://extensions > Errors
+        console.warn('Plan generation did not complete:', err?.message || err);
         let cpInfo = err?.checkpoint as { completed: number; total: number } | undefined;
         if (typeof browser !== 'undefined' && browser.storage?.local) {
           try {
@@ -948,6 +966,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             )}
 
             {(errorState.kind === 'quota' ||
+              errorState.kind === 'overload' ||
               errorState.kind === 'network' ||
               errorState.kind === 'other') && (
               <Button
@@ -961,7 +980,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
               </Button>
             )}
 
-            {errorState.kind === 'quota' && (
+            {(errorState.kind === 'quota' || errorState.kind === 'overload') && (
               <>
                 <Button
                   size="xs"

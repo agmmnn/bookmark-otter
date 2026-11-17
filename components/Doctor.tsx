@@ -1034,7 +1034,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
         );
       }
     } catch (err) {
-      console.error('Failed to verify HTTPS support:', err);
+      console.warn('Could not verify HTTPS support:', err);
     } finally {
       setIsVerifyingHttps(false);
       setVerifyHttpsProgress(null);

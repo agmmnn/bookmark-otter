@@ -117,7 +117,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
       setActiveSuggestion(suggestion);
       setEditedTitle(suggestion.suggestedTitle);
     } catch (err: any) {
-      console.error('Failed to get suggestion:', err);
+      console.warn('Could not get suggestion:', err?.message || err);
       setError(err?.message || 'Could not generate suggestion.');
     } finally {
       setLoadingItemId(null);
@@ -210,7 +210,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
       setSelectedIds(new Set());
       onBookmarkChanged?.();
     } catch (err: any) {
-      console.error('Failed to batch organize bookmarks:', err);
+      console.warn('Could not batch organize bookmarks:', err?.message || err);
       setError(err?.message || 'Could not generate suggestions.');
     } finally {
       setBatchProgress(null);
