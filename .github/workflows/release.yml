@@ -1,0 +1,96 @@
+name: Release & Chrome Web Store
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_to_cws:
+        description: 'Submit uploaded build for Chrome Web Store review automatically'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, GitHub Release & CWS Upload
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(bun -e "console.log(require('./package.json').version)")
+          echo "Tag version: $TAG_VERSION | package.json version: $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+
+      - name: Check formatting, typecheck & lint
+        run: |
+          bun run fmt:check
+          bun run compile
+          bun run lint
+
+      - name: Build Chrome & Firefox release packages
+        run: |
+          bun run zip
+          bun run zip:firefox
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            .output/bookmark-otter-*-chrome.zip
+            .output/bookmark-otter-*-firefox.zip
+
+      - name: Check Chrome Web Store credentials
+        id: cws-check
+        env:
+          CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          if [ -n "$CWS_EXTENSION_ID" ] && [ -n "$CWS_CLIENT_ID" ] && [ -n "$CWS_CLIENT_SECRET" ] && [ -n "$CWS_REFRESH_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Chrome Web Store secrets are not configured yet. Add CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, and CWS_REFRESH_TOKEN to enable automatic store upload."
+          fi
+
+      - name: Upload & Publish to Chrome Web Store
+        if: steps.cws-check.outputs.configured == 'true'
+        env:
+          CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISH: ${{ github.event.inputs.publish_to_cws || 'true' }}
+        run: bun run scripts/cws-publish.ts
+
+      - name: Upload ZIP packages as fallback artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bookmark-otter-release-zips
+          path: .output/bookmark-otter-*.zip
+          retention-days: 30
