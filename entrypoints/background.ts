@@ -21,7 +21,9 @@ import {
 import { addNodeToTrash } from '@/services/trash';
 
 export default defineBackground(() => {
-  console.log('🦦 Bookmark Otter background worker started');
+  if (import.meta.env.DEV) {
+    console.log('🦦 Bookmark Otter background worker started');
+  }
 
   // Track bookmarks currently undergoing AI suggestion generation
   const inFlightBookmarkIds = new Set<string>();
@@ -111,9 +113,11 @@ export default defineBackground(() => {
 
       // 1. Check if bookmark was removed/unstarred while AI was generating
       if (!inFlightBookmarkIds.has(id)) {
-        console.log(
-          `[AI Suggestion] Bookmark ${id} was deleted/unstarred while analyzing. Discarding.`
-        );
+        if (import.meta.env.DEV) {
+          console.log(
+            `[AI Suggestion] Bookmark ${id} was deleted/unstarred while analyzing. Discarding.`
+          );
+        }
         return;
       }
       inFlightBookmarkIds.delete(id);
@@ -122,11 +126,15 @@ export default defineBackground(() => {
       try {
         const [existing] = await browser.bookmarks.get(id);
         if (!existing) {
-          console.log(`[AI Suggestion] Bookmark ${id} no longer exists. Discarding.`);
+          if (import.meta.env.DEV) {
+            console.log(`[AI Suggestion] Bookmark ${id} no longer exists. Discarding.`);
+          }
           return;
         }
       } catch {
-        console.log(`[AI Suggestion] Bookmark ${id} was removed. Discarding.`);
+        if (import.meta.env.DEV) {
+          console.log(`[AI Suggestion] Bookmark ${id} was removed. Discarding.`);
+        }
         return;
       }
 
@@ -177,7 +185,8 @@ export default defineBackground(() => {
   });
 
   // 3. Handle on-demand single-bookmark AI suggestion & API test requests from Sidepanel
-  browser.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
+  browser.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
+    if (sender.id !== browser.runtime.id) return false;
     if (!message) return false;
 
     if (message.type === 'AI_TEST_CONNECTION') {
@@ -213,6 +222,10 @@ export default defineBackground(() => {
 
   // 4. Handle long-running Copilot reorganization plans over Port with streaming progress
   browser.runtime.onConnect.addListener((port) => {
+    if (port.sender?.id !== browser.runtime.id) {
+      port.disconnect();
+      return;
+    }
     if (port.name !== 'ai-copilot-plan') return;
 
     let isDisconnected = false;

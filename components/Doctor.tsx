@@ -54,7 +54,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
-import { formatFolderTitle, formatShortFolderPath, useResponsiveTabStage } from '@/lib/utils';
+import {
+  formatFolderTitle,
+  formatShortFolderPath,
+  getSafeHttpUrl,
+  useResponsiveTabStage,
+} from '@/lib/utils';
 import { getBookmarkTree, flattenBookmarks, getAllFolders } from '@/services/bookmarks';
 import {
   findDuplicatesWithSeparators,
@@ -628,8 +633,9 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
   const handleOpenSelectedSimilar = () => {
     for (const b of selectedSimilarItems) {
-      if (b.url) {
-        browser.tabs.create({ url: b.url, active: false });
+      const safeUrl = getSafeHttpUrl(b.url);
+      if (safeUrl) {
+        browser.tabs.create({ url: safeUrl, active: false });
       }
     }
     showToast(t('openInTabs') || `Opened ${selectedSimilarItems.length} tabs`);
@@ -1650,10 +1656,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 )}
                 <DropdownMenuItem
                   onClick={() => {
+                    const safeUrl = getSafeHttpUrl(item.url);
+                    if (!safeUrl) return;
                     if (browser.tabs?.create) {
-                      browser.tabs.create({ url: item.url, active: true });
+                      browser.tabs.create({ url: safeUrl, active: true });
                     } else {
-                      window.open(item.url, '_blank', 'noreferrer');
+                      window.open(safeUrl, '_blank', 'noreferrer');
                     }
                   }}
                   className="cursor-pointer text-xs"
@@ -2373,7 +2381,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                           {t('oldestBookmark') || 'Oldest Bookmark'}
                         </span>
                         <a
-                          href={liveInsights.oldestBookmark.url}
+                          href={getSafeHttpUrl(liveInsights.oldestBookmark.url)}
                           target="_blank"
                           rel="noreferrer"
                           className="text-primary flex min-w-0 items-center gap-1 truncate text-[11px] font-medium hover:underline"
@@ -3155,7 +3163,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                               onClick={(e) => e.stopPropagation()}
                             >
                               <a
-                                href={item.url}
+                                href={getSafeHttpUrl(item.url)}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="text-muted-foreground hover:text-foreground cursor-pointer p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
@@ -3449,7 +3457,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                             {/* Item Actions */}
                             <div className="flex shrink-0 items-center gap-1 opacity-80 group-hover:opacity-100">
                               <a
-                                href={item.url}
+                                href={getSafeHttpUrl(item.url)}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
@@ -4618,7 +4626,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <a
-                            href={item.bookmark.url}
+                            href={getSafeHttpUrl(item.bookmark.url)}
                             target="_blank"
                             rel="noreferrer"
                             className="text-foreground hover:text-primary max-w-[210px] cursor-pointer truncate font-medium transition-colors"
@@ -4676,7 +4684,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                     {/* Right: Actions */}
                     <div className="flex shrink-0 items-center gap-1 opacity-80 transition-opacity group-hover:opacity-100">
                       <a
-                        href={item.bookmark.url}
+                        href={getSafeHttpUrl(item.bookmark.url)}
                         target="_blank"
                         rel="noreferrer"
                         className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"

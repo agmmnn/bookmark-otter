@@ -116,7 +116,8 @@ export const App: React.FC = () => {
     browser.storage.onChanged.addListener(storageListener);
 
     // 2. Listen for suggestions messages coming from background worker
-    const messageListener = (msg: any) => {
+    const messageListener = (msg: any, sender: Browser.runtime.MessageSender) => {
+      if (sender.id && sender.id !== browser.runtime.id) return;
       if (msg?.type === 'SUGGESTIONS_UPDATED' && Array.isArray(msg.suggestions)) {
         setPendingSuggestions(msg.suggestions);
       } else if (msg?.type === 'NEW_SUGGESTION') {

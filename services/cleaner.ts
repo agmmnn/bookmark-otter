@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser';
 
+import { getSafeHttpUrl } from '@/lib/url';
 import type {
   BrokenLinkResult,
   DuplicateGroup,
@@ -342,6 +343,11 @@ export async function checkUrlDirect(
   error?: string;
   finalUrl?: string;
 }> {
+  const safeUrl = getSafeHttpUrl(url);
+  if (!safeUrl) {
+    return { status: 'protected', error: 'Unsupported URL protocol' };
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -350,7 +356,7 @@ export async function checkUrlDirect(
   try {
     let res: Response | null = null;
     try {
-      const headRes = await fetch(url, {
+      const headRes = await fetch(safeUrl, {
         method: 'HEAD',
         signal: combinedSignal,
         redirect: 'follow',
@@ -369,7 +375,7 @@ export async function checkUrlDirect(
     }
 
     if (!res) {
-      res = await fetch(url, {
+      res = await fetch(safeUrl, {
         method: 'GET',
         signal: combinedSignal,
         redirect: 'follow',

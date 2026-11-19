@@ -28,12 +28,20 @@ export default defineConfig({
   }),
   manifest: ({ manifestVersion }) => ({
     name: '__MSG_extName__',
+    short_name: 'Bookmark Otter',
     description: '__MSG_extDescription__',
+    homepage_url: 'https://github.com/agmmnn/bookmark-otter',
     default_locale: 'en',
     permissions: ['bookmarks', 'storage', 'sidePanel', 'tabs', 'scripting'],
     host_permissions: AI_HOST_PERMISSIONS,
     ...(manifestVersion === 3
-      ? { optional_host_permissions: ['http://*/*', 'https://*/*'] }
+      ? {
+          minimum_chrome_version: '114',
+          optional_host_permissions: ['http://*/*', 'https://*/*'],
+          content_security_policy: {
+            extension_pages: "script-src 'self'; object-src 'self'; frame-ancestors 'none'",
+          },
+        }
       : { optional_permissions: ['http://*/*', 'https://*/*'] }),
     action: {
       default_title: '__MSG_extName__',

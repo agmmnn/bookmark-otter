@@ -383,8 +383,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleClearLocalData = async () => {
     await clearAllLocalData();
     try {
-      localStorage.removeItem('last_broken_scan');
-      localStorage.removeItem('theme');
+      localStorage.clear();
     } catch {}
     setGeminiKey('');
     setOpenaiKey('');

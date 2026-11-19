@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
-import { formatMiddleFolderPath } from '@/lib/utils';
+import { formatMiddleFolderPath, getSafeHttpUrl } from '@/lib/utils';
 import { suggestForNewBookmarkViaBackground } from '@/services/aiClient';
 import { getRecentBookmarks, getBookmarkTree, getAllFolders } from '@/services/bookmarks';
 import { addPendingSuggestion, updateBadgeCount } from '@/services/storage';
@@ -446,7 +446,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                     }`}
                   >
                     <a
-                      href={b.url}
+                      href={getSafeHttpUrl(b.url)}
                       target="_blank"
                       rel="noreferrer"
                       className="text-muted-foreground/60 hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"

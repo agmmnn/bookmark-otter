@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
-import { formatFolderTitle } from '@/lib/utils';
+import { formatFolderTitle, getSafeHttpUrl } from '@/lib/utils';
 import { getBookmarkTree, flattenBookmarks } from '@/services/bookmarks';
 import { removeBookmarkWithTrash } from '@/services/cleaner';
 import { restoreRecentTrashItems } from '@/services/trash';
@@ -388,7 +388,7 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
           {hasCustomTitle ? (
             <>
               <a
-                href={node.url}
+                href={getSafeHttpUrl(node.url)}
                 target="_blank"
                 rel="noreferrer"
                 className="text-foreground hover:text-primary cursor-pointer truncate font-medium transition-colors"
@@ -404,7 +404,7 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
             </>
           ) : (
             <a
-              href={node.url}
+              href={getSafeHttpUrl(node.url)}
               target="_blank"
               rel="noreferrer"
               className="text-muted-foreground hover:text-foreground cursor-pointer truncate font-mono text-[11px] transition-colors"
@@ -429,7 +429,7 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
             )}
           </button>
           <a
-            href={node.url}
+            href={getSafeHttpUrl(node.url)}
             target="_blank"
             rel="noreferrer"
             title={t('openInTabTooltip')}
@@ -658,7 +658,7 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
                     }}
                   />
                   <a
-                    href={bookmark.url}
+                    href={getSafeHttpUrl(bookmark.url)}
                     target="_blank"
                     rel="noreferrer"
                     className="text-foreground hover:text-primary cursor-pointer truncate font-medium transition-colors"
@@ -709,7 +709,7 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
                   </button>
 
                   <a
-                    href={bookmark.url}
+                    href={getSafeHttpUrl(bookmark.url)}
                     target="_blank"
                     rel="noreferrer"
                     title={t('openInTabTooltip') || 'Open in new tab'}
