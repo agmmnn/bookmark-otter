@@ -1,6 +1,6 @@
 {
   "name": "bookmark-otter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "AI bookmark manager for your side panel: organize folders, remove duplicates, find dead links, clean tracking URLs.",
   "license": "MIT",
