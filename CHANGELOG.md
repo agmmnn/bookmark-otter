@@ -4,6 +4,24 @@ All notable changes to **Bookmark Otter** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-19
+
+### Added
+
+- **Header GitHub Link:** Added a direct repository icon link in the top header bar.
+- **GitHub Actions CI & Release Automation:** Added automated formatting, typecheck, lint, and Chrome/Firefox build CI (`ci.yml`) plus tag-driven GitHub Release + Chrome Web Store auto-publish (`release.yml`, `scripts/release.ts`, `scripts/cws-publish.ts`).
+
+### Changed
+
+- **UI/UX Animation Polish:** Removed open/row animations on keyboard-triggered `@mention` autocomplete, switched progress and analytics bars to GPU-composited `transform: scaleX()`, added asymmetric faster exit timings on menus/selects/dialogs, made popovers trigger-origin-aware, normalized tactile button press scales (`0.96`–`0.97`), gated hover gear rotation to fine-pointer devices, and refined `prefers-reduced-motion` to preserve gentle opacity/color cues.
+- **Store & Localization Titles:** Updated EN/TR extension titles to use a clean colon separator and consistent `AI` branding (`Bookmark Otter: AI Bookmark Manager, Cleaner & Link Checker`), added `short_name: "Bookmark Otter"`, `homepage_url`, and `minimum_chrome_version: "114"`.
+- **Documentation:** Refreshed `README.md` with live Chrome Web Store install link, full feature overview, permissions summary, and updated script reference.
+
+### Fixed
+
+- **Clean Chrome Extensions Errors Page:** Logged expected external AI provider errors (quota, high demand, network timeouts) with `console.warn` instead of `console.error` so they no longer appear as extension bugs under `chrome://extensions > Errors`, added a 15-second MV3 Port `KEEPALIVE` heartbeat during long LLM calls, and surfaced a dedicated high-demand (`overload`) Copilot error state.
+- **Security & Local Data Hardening:** Enforced `sender.id === browser.runtime.id` validation on `runtime.onMessage` and `runtime.onConnect`, restricted external bookmark links and URL health checks to `http:` / `https:` via `getSafeHttpUrl`, added explicit MV3 `content_security_policy` (`frame-ancestors 'none'`), cleared all extension `localStorage` keys in **Clear all local data**, gated background `console.log` calls behind `DEV`, and moved `shadcn` CLI to `devDependencies`.
+
 ## [1.0.0] - 2026-11-17
 
 Initial public release prepared for Chrome Web Store (`chrome-mv3`), with cross-browser builds for `firefox-mv2` and `safari-mv2`.
