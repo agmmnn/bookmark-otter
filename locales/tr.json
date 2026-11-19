@@ -1,6 +1,6 @@
 {
-  "extName": "Bookmark Otter – Yapay Zekâ Yer İmi Yöneticisi ve Link Kontrolü",
-  "extDescription": "Yan panelde yapay zekâyla yer imlerini düzenleyin, yinelenenleri ve ölü linkleri temizleyin, izleme kodlarını kaldırın.",
+  "extName": "Bookmark Otter: AI Yer İmi Yöneticisi, Temizleyici ve Link Kontrolü",
+  "extDescription": "Yan panelde AI ile yer imlerini düzenleyin, yinelenenleri ve ölü linkleri temizleyin, izleme kodlarını kaldırın.",
   "appTitle": "Bookmark Otter",
   "copilotBadge": "AI Asistanı",
   "appSubtitle": "Akıllı Yer İmi Düzenleyici",
@@ -29,7 +29,7 @@
   "planStatsRemoves": "{count} silme",
   "planStatsRenames": "{count} yeniden adlandırma",
   "recentTitle": "Son Eklenenler",
-  "recentDesc": "Son kaydettiğiniz linkleri tek tıkla yapay zeka ile düzenleyin",
+  "recentDesc": "Son kaydettiğiniz linkleri tek tıkla AI ile düzenleyin",
   "aiSuggestBtn": "AI Düzenle",
   "openInTabTooltip": "Yeni sekmede aç",
   "refreshTooltip": "Listeyi yenile",
