@@ -93,7 +93,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
   };
 
   return (
-    <div className="animate-in fade-in slide-in-from-top-1 mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3 duration-150">
+    <div className="animate-in fade-in slide-in-from-top-1 mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3 duration-150 ease-[var(--ease-out)]">
       {/* Header Info with Back Button */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
         <div className="flex items-start gap-2">
@@ -198,7 +198,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
             return (
               <div
                 key={item.id}
-                className="group border-border/50 bg-card hover:border-border flex items-center justify-between gap-3 rounded-lg border p-3 transition-all duration-150 hover:shadow-2xs"
+                className="group border-border/50 bg-card hover:border-border flex items-center justify-between gap-3 rounded-lg border p-3 transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)] hover:shadow-2xs"
               >
                 {/* Left: Icon + Info */}
                 <div className="flex min-w-0 flex-1 items-start gap-2.5">
@@ -285,7 +285,7 @@ export const RecycleBin: React.FC<RecycleBinProps> = React.memo(function Recycle
                   <button
                     onClick={() => handleDeletePermanent(item)}
                     title={t('permanentDeleteTooltip') || 'Delete permanently'}
-                    className="text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 cursor-pointer rounded-md p-1.5 transition-colors active:scale-90"
+                    className="text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 cursor-pointer rounded-md p-1.5 transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                   >
                     <Trash2 className="size-3.5" />
                   </button>

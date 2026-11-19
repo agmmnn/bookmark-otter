@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   Edit2,
   AtSign,
-  Sparkles,
   RotateCcw,
   History,
   Folder,
@@ -1095,11 +1094,11 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
 
       {/* Real-time Agent Harness Progress Card */}
       {isLoading && (
-        <div className="border-border/70 from-card via-card to-primary/5 animate-in fade-in-0 zoom-in-95 space-y-2 rounded-xl border bg-gradient-to-br p-3 shadow-xs duration-200">
+        <div className="border-border/70 from-card via-card to-primary/5 animate-in fade-in-0 zoom-in-95 space-y-2 rounded-xl border bg-gradient-to-br p-3 shadow-xs duration-180 ease-[var(--ease-out)]">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <div className="bg-primary/10 text-primary flex size-7 shrink-0 items-center justify-center rounded-lg">
-                <Sparkles className="size-4 animate-spin duration-1000" />
+                <Loader2 className="size-4 animate-spin duration-500" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
@@ -1137,7 +1136,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                 size="xs"
                 variant="outline"
                 onClick={handleStopGeneration}
-                className="border-border/70 text-muted-foreground hover:text-destructive hover:border-destructive/40 h-6 cursor-pointer gap-1 px-2 text-[10px] active:scale-95"
+                className="border-border/70 text-muted-foreground hover:text-destructive hover:border-destructive/40 h-6 cursor-pointer gap-1 px-2 text-[10px]"
                 title={t('stopScanBtn') || (lang === 'tr' ? 'Durdur' : 'Stop')}
               >
                 <Square className="size-2.5 fill-current" />
@@ -1146,11 +1145,13 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
             </div>
           </div>
 
-          {/* Animated Progress Bar */}
+          {/* Animated Progress Bar (GPU scaleX, no layout thrash) */}
           <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
             <div
-              className="bg-primary h-full rounded-full transition-all duration-300 ease-out"
-              style={{ width: `${agentProgress?.percentage ?? 45}%` }}
+              className="bg-primary h-full w-full origin-left rounded-full transition-transform duration-200 ease-[var(--ease-out)]"
+              style={{
+                transform: `scaleX(${Math.max(0, Math.min(1, (agentProgress?.percentage ?? 45) / 100))})`,
+              }}
             />
           </div>
         </div>
@@ -1251,9 +1252,9 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                   onClick={() => handleGeneratePlan(promptText)}
                   title={t('generatePlanTooltip')}
                   aria-label={t('generatePlanTooltip')}
-                  className={`bg-primary text-primary-foreground flex size-6.5 shrink-0 items-center justify-center rounded-md shadow-2xs transition-all duration-120 ${
+                  className={`bg-primary text-primary-foreground flex size-6.5 shrink-0 items-center justify-center rounded-md shadow-2xs transition-[transform,background-color,opacity] duration-150 ease-[var(--ease-out)] ${
                     canSubmit && !isLoading
-                      ? 'hover:bg-primary/90 cursor-pointer active:scale-95'
+                      ? 'hover:bg-primary/90 cursor-pointer active:scale-[0.97]'
                       : 'cursor-not-allowed opacity-45'
                   }`}
                 >
@@ -1421,7 +1422,7 @@ export const AICopilot: React.FC<AICopilotProps> = React.memo(function AICopilot
                     setScopePreset(recipe.scope);
                     textareaRef.current?.focus();
                   }}
-                  className="bg-muted/30 hover:bg-muted/70 text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10.5px] transition-all duration-120 active:scale-[0.96]"
+                  className="bg-muted/30 hover:bg-muted/70 text-muted-foreground hover:text-foreground border-border/50 flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10.5px] transition-[transform,background-color,color,border-color] duration-150 ease-[var(--ease-out)] active:scale-[0.97]"
                 >
                   <span>{recipe.icon}</span>
                   <span>{recipe.label}</span>

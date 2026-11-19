@@ -1790,7 +1790,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabOverview') || 'Overview'}
           data-active={subTab === 'overview'}
           onClick={() => handleSubTabChange('overview')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'overview'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -1815,7 +1815,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabDuplicates') || 'Duplicates'}
           data-active={subTab === 'duplicates'}
           onClick={() => handleSubTabChange('duplicates')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'duplicates'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -1848,7 +1848,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabSimilar') || 'Similar'}
           data-active={subTab === 'similar'}
           onClick={() => handleSubTabChange('similar')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'similar'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -1881,7 +1881,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabTrackers') || 'Trackers'}
           data-active={subTab === 'trackers'}
           onClick={() => handleSubTabChange('trackers')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'trackers'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -1914,7 +1914,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabInsecure') || 'HTTP'}
           data-active={subTab === 'insecure'}
           onClick={() => handleSubTabChange('insecure')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'insecure'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -1951,7 +1951,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabBroken') || '404 Links'}
           data-active={subTab === 'broken'}
           onClick={() => handleSubTabChange('broken')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'broken'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -1988,7 +1988,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
           aria-label={t('tabEmptyFolders') || 'Empty Folders'}
           data-active={subTab === 'empty'}
           onClick={() => handleSubTabChange('empty')}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-xs font-medium transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             subTab === 'empty'
               ? 'bg-card text-foreground border-border/70 flex-[1.5] border px-2 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground flex-1 px-1'
@@ -2149,7 +2149,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <button
                   type="button"
                   onClick={() => handleSubTabChange('duplicates')}
-                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     liveInsights.duplicateCount > 0
                       ? 'border-amber-500/30 bg-amber-500/5'
                       : 'border-border/50 bg-card'
@@ -2179,7 +2179,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <button
                   type="button"
                   onClick={() => handleSubTabChange('similar')}
-                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     (liveInsights.similarCount || 0) > 0
                       ? 'border-cyan-500/30 bg-cyan-500/5'
                       : 'border-border/50 bg-card'
@@ -2209,7 +2209,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <button
                   type="button"
                   onClick={() => handleSubTabChange('trackers')}
-                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     (liveInsights.trackingCount || 0) > 0
                       ? 'border-teal-500/30 bg-teal-500/5'
                       : 'border-border/50 bg-card'
@@ -2239,7 +2239,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <button
                   type="button"
                   onClick={() => handleSubTabChange('insecure')}
-                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     liveInsights.httpCount > 0
                       ? 'border-amber-500/30 bg-amber-500/5'
                       : 'border-border/50 bg-card'
@@ -2269,7 +2269,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <button
                   type="button"
                   onClick={() => handleSubTabChange('broken')}
-                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     hasEverScanned404 && (liveInsights.brokenCount || 0) > 0
                       ? 'border-rose-500/30 bg-rose-500/5'
                       : !hasEverScanned404
@@ -2311,7 +2311,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 <button
                   type="button"
                   onClick={() => handleSubTabChange('empty')}
-                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-all duration-120 active:scale-[0.98] ${
+                  className={`hover:border-border cursor-pointer space-y-1 rounded-lg border p-2.5 text-left transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     liveInsights.emptyFolderCount > 0
                       ? 'border-blue-500/30 bg-blue-500/5'
                       : 'border-border/50 bg-card'
@@ -2517,25 +2517,25 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                   <div className="border-border/40 space-y-3 border-t p-3.5">
                     <div className="bg-muted/40 flex h-2 w-full overflow-hidden rounded-full">
                       <div
-                        className="bg-emerald-500 transition-[width] duration-300"
+                        className="bg-emerald-500 transition-[width] duration-200 ease-[var(--ease-out)]"
                         style={{
                           width: `${liveInsights.ageDistribution.under6Months.percentage}%`,
                         }}
                       />
                       <div
-                        className="bg-sky-500 transition-[width] duration-300"
+                        className="bg-sky-500 transition-[width] duration-200 ease-[var(--ease-out)]"
                         style={{
                           width: `${liveInsights.ageDistribution.sixTo12Months.percentage}%`,
                         }}
                       />
                       <div
-                        className="bg-amber-500 transition-[width] duration-300"
+                        className="bg-amber-500 transition-[width] duration-200 ease-[var(--ease-out)]"
                         style={{
                           width: `${liveInsights.ageDistribution.oneTo3Years.percentage}%`,
                         }}
                       />
                       <div
-                        className="bg-purple-500 transition-[width] duration-300"
+                        className="bg-purple-500 transition-[width] duration-200 ease-[var(--ease-out)]"
                         style={{
                           width: `${liveInsights.ageDistribution.over3Years.percentage}%`,
                         }}
@@ -2678,8 +2678,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
                               <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
                                 <div
-                                  className="h-full rounded-full bg-amber-500 transition-[width] duration-300 ease-out"
-                                  style={{ width: `${barWidth}%` }}
+                                  className="h-full w-full origin-left rounded-full bg-amber-500 transition-transform duration-200 ease-[var(--ease-out)]"
+                                  style={{ transform: `scaleX(${barWidth / 100})` }}
                                 />
                               </div>
                             </div>
@@ -2757,8 +2757,8 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
                               <div className="bg-muted/40 h-1.5 w-full overflow-hidden rounded-full">
                                 <div
-                                  className="bg-foreground/60 h-full rounded-full transition-[width] duration-300 ease-out"
-                                  style={{ width: `${barWidth}%` }}
+                                  className="bg-foreground/60 h-full w-full origin-left rounded-full transition-transform duration-200 ease-[var(--ease-out)]"
+                                  style={{ transform: `scaleX(${barWidth / 100})` }}
                                 />
                               </div>
                             </div>
@@ -3158,7 +3158,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                                 href={item.url}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 transition-transform active:scale-90"
+                                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                                 title={t('openInTabTooltip') || 'Open in new tab'}
                               >
                                 <ExternalLink className="size-3" />
@@ -3167,7 +3167,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveDuplicateItems(group, extraItems)}
-                                  className="text-muted-foreground cursor-pointer p-1 transition-[color,transform] duration-120 hover:text-rose-500 active:scale-90"
+                                  className="text-muted-foreground cursor-pointer p-1 transition-[color,transform] duration-150 ease-[var(--ease-out)] hover:text-rose-500 active:scale-[0.96]"
                                   title={
                                     extraItems.length > 1
                                       ? lang === 'tr'
@@ -3452,7 +3452,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                                 href={item.url}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                                className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                                 title={t('openInTabTooltip') || 'Open in new tab'}
                               >
                                 <ExternalLink className="size-3" />
@@ -3460,7 +3460,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                               <button
                                 type="button"
                                 onClick={() => handleDeleteSingleSimilar(item)}
-                                className="text-muted-foreground cursor-pointer rounded p-1 transition-[color,transform] duration-120 hover:text-rose-500 active:scale-90"
+                                className="text-muted-foreground cursor-pointer rounded p-1 transition-[color,transform] duration-150 ease-[var(--ease-out)] hover:text-rose-500 active:scale-[0.96]"
                                 title="Move to Recycle Bin"
                               >
                                 <Trash2 className="size-3" />
@@ -4054,11 +4054,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-amber-500/15">
                   <div
-                    className="h-full bg-amber-500 transition-[width] duration-150 ease-out"
+                    className="h-full w-full origin-left bg-amber-500 transition-transform duration-150 ease-[var(--ease-out)]"
                     style={{
-                      width: `${
-                        (verifyHttpsProgress.current / (verifyHttpsProgress.total || 1)) * 100
-                      }%`,
+                      transform: `scaleX(${Math.max(
+                        0,
+                        Math.min(1, verifyHttpsProgress.current / (verifyHttpsProgress.total || 1))
+                      )})`,
                     }}
                   />
                 </div>
@@ -4351,9 +4352,12 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                 </div>
                 <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
                   <div
-                    className="bg-primary h-full transition-[width] duration-150 ease-out"
+                    className="bg-primary h-full w-full origin-left transition-transform duration-150 ease-[var(--ease-out)]"
                     style={{
-                      width: `${(scanProgress.current / (scanProgress.total || 1)) * 100}%`,
+                      transform: `scaleX(${Math.max(
+                        0,
+                        Math.min(1, scanProgress.current / (scanProgress.total || 1))
+                      )})`,
                     }}
                   />
                 </div>
@@ -4442,14 +4446,17 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
 
                 {/* Real-time Animated Deletion Progress Bar */}
                 {isRemovingBroken && removingBrokenProgress && (
-                  <div className="animate-in fade-in h-1.5 w-full overflow-hidden rounded-full bg-rose-500/20 duration-150">
+                  <div className="animate-in fade-in h-1.5 w-full overflow-hidden rounded-full bg-rose-500/20 duration-150 ease-[var(--ease-out)]">
                     <div
-                      className="h-full bg-rose-500 transition-[width] duration-100 ease-out"
+                      className="h-full w-full origin-left bg-rose-500 transition-transform duration-120 ease-[var(--ease-out)]"
                       style={{
-                        width: `${
-                          (removingBrokenProgress.current / (removingBrokenProgress.total || 1)) *
-                          100
-                        }%`,
+                        transform: `scaleX(${Math.max(
+                          0,
+                          Math.min(
+                            1,
+                            removingBrokenProgress.current / (removingBrokenProgress.total || 1)
+                          )
+                        )})`,
                       }}
                     />
                   </div>
@@ -4672,7 +4679,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                         href={item.bookmark.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                        className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                         title={t('openInTabTooltip') || 'Open in new tab'}
                       >
                         <ExternalLink className="size-3" />
@@ -4681,7 +4688,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                       <button
                         type="button"
                         onClick={() => handleDismissBroken(item.bookmark.id)}
-                        className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                        className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                         title={
                           lang === 'tr'
                             ? 'Yoksay (Yer imini koru ve listeden gizle)'
@@ -4696,7 +4703,7 @@ export const Doctor: React.FC<DoctorProps> = React.memo(function Doctor({
                         type="button"
                         disabled={isDeletingThis || isRemovingBroken}
                         onClick={() => handleRemoveBroken(item)}
-                        className="text-muted-foreground cursor-pointer rounded p-1 transition-[color,transform] duration-120 hover:text-rose-500 active:scale-90 disabled:opacity-50"
+                        className="text-muted-foreground cursor-pointer rounded p-1 transition-[color,transform] duration-150 ease-[var(--ease-out)] hover:text-rose-500 active:scale-[0.96] disabled:opacity-50"
                         title="Move to Recycle Bin"
                       >
                         {isDeletingThis ? (

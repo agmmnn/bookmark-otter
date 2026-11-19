@@ -102,7 +102,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
     const hasMultiple = items.length > 1;
 
     return (
-      <div className="animate-in fade-in-0 zoom-in-95 mx-3 mt-3 rounded-xl border border-amber-300/80 bg-gradient-to-b from-amber-500/10 via-amber-500/5 to-transparent p-3 shadow-xs transition-all duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] dark:border-amber-700/60">
+      <div className="animate-in fade-in-0 zoom-in-95 mx-3 mt-3 rounded-xl border border-amber-300/80 bg-gradient-to-b from-amber-500/10 via-amber-500/5 to-transparent p-3 shadow-xs duration-200 ease-[var(--ease-out)] dark:border-amber-700/60">
         {/* Header Bar */}
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
@@ -123,7 +123,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
                   onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
                   disabled={safeIndex === 0}
                   title={t('prevSuggestionTooltip')}
-                  className="cursor-pointer rounded p-0.5 transition-transform hover:bg-amber-500/20 active:scale-[0.92] disabled:cursor-not-allowed disabled:opacity-30"
+                  className="cursor-pointer rounded p-0.5 transition-[transform,background-color] duration-150 ease-[var(--ease-out)] hover:bg-amber-500/20 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <ChevronLeft className="h-3 w-3" />
                 </button>
@@ -135,7 +135,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
                   onClick={() => setCurrentIndex((i) => Math.min(items.length - 1, i + 1))}
                   disabled={safeIndex === items.length - 1}
                   title={t('nextSuggestionTooltip')}
-                  className="cursor-pointer rounded p-0.5 transition-transform hover:bg-amber-500/20 active:scale-[0.92] disabled:cursor-not-allowed disabled:opacity-30"
+                  className="cursor-pointer rounded p-0.5 transition-[transform,background-color] duration-150 ease-[var(--ease-out)] hover:bg-amber-500/20 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <ChevronRight className="h-3 w-3" />
                 </button>
@@ -265,7 +265,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
               variant="ghost"
               onClick={() => onDismiss(currentItem)}
               disabled={isApplying}
-              className="text-muted-foreground hover:text-foreground h-6 cursor-pointer px-2 text-[10.5px] transition-all duration-150 active:scale-[0.97]"
+              className="text-muted-foreground hover:text-foreground h-6 cursor-pointer px-2 text-[10.5px]"
             >
               <X className="mr-1 h-3 w-3" />
               {t('dismissBtn')}
@@ -278,7 +278,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
                   variant="outline"
                   onClick={() => onApply(currentItem, currentEditedTitle)}
                   disabled={isApplying}
-                  className="h-6 cursor-pointer gap-1 px-2 text-[10.5px] font-medium transition-all duration-150 active:scale-[0.97]"
+                  className="h-6 cursor-pointer gap-1 px-2 text-[10.5px] font-medium"
                 >
                   <Check className="h-3 w-3" />
                   {t('applyBtn')}
@@ -288,7 +288,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
                   variant="default"
                   onClick={() => onApplyAll(editedTitles)}
                   disabled={isApplying}
-                  className="h-6 cursor-pointer gap-1 bg-amber-600 px-2.5 text-[10.5px] font-medium text-white shadow-xs transition-all duration-150 hover:bg-amber-500 active:scale-[0.97]"
+                  className="h-6 cursor-pointer gap-1 bg-amber-600 px-2.5 text-[10.5px] font-medium text-white shadow-xs hover:bg-amber-500"
                 >
                   <CheckCheck className="h-3 w-3" />
                   {isApplying ? t('applyingBtn') : t('applyAllBtn', { count: items.length })}
@@ -300,7 +300,7 @@ export const PendingSuggestionCard: React.FC<PendingSuggestionCardProps> = React
                 variant="default"
                 onClick={() => onApply(currentItem, currentEditedTitle)}
                 disabled={isApplying}
-                className="h-6 cursor-pointer gap-1 bg-amber-600 px-2.5 text-[10.5px] font-medium text-white shadow-xs transition-all duration-150 hover:bg-amber-500 active:scale-[0.97]"
+                className="h-6 cursor-pointer gap-1 bg-amber-600 px-2.5 text-[10.5px] font-medium text-white shadow-xs hover:bg-amber-500"
               >
                 <Check className="h-3 w-3" />
                 {isApplying ? t('applyingBtn') : t('applyBtn')}

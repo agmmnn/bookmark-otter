@@ -449,7 +449,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                       href={b.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-muted-foreground/60 hover:text-foreground cursor-pointer rounded p-1 transition-transform active:scale-90"
+                      className="text-muted-foreground/60 hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                       title={t('openInTabTooltip')}
                     >
                       <ExternalLink className="size-3" />
@@ -460,7 +460,7 @@ export const RecentBookmarks: React.FC<RecentBookmarksProps> = React.memo(functi
                       variant="outline"
                       onClick={() => handleRequestSuggestion(b)}
                       disabled={isAnalyzing}
-                      className="h-6 cursor-pointer gap-1 rounded-md border-amber-500/40 bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-700 transition-all duration-120 hover:bg-amber-500/25 active:scale-[0.95] dark:text-amber-300"
+                      className="h-6 cursor-pointer gap-1 rounded-md border-amber-500/40 bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
                       title={t('aiSuggestBtn')}
                     >
                       {isAnalyzing ? (

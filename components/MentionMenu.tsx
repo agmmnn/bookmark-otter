@@ -40,14 +40,14 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({
 
   if (items.length === 0) {
     return (
-      <div className="border-border/80 bg-popover/98 text-muted-foreground animate-in fade-in-0 zoom-in-95 absolute top-full right-0 left-0 z-50 mt-1.5 rounded-lg border p-3 text-center text-xs shadow-lg backdrop-blur-md duration-100">
+      <div className="border-border/80 bg-popover/98 text-muted-foreground absolute top-full right-0 left-0 z-50 mt-1.5 rounded-lg border p-3 text-center text-xs shadow-lg backdrop-blur-md">
         No folders or bookmarks match this mention.
       </div>
     );
   }
 
   return (
-    <div className="border-border/80 bg-popover/98 animate-in fade-in-0 zoom-in-95 absolute top-full right-0 left-0 z-50 mt-1.5 overflow-hidden rounded-xl border text-xs shadow-xl backdrop-blur-md transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]">
+    <div className="border-border/80 bg-popover/98 absolute top-full right-0 left-0 z-50 mt-1.5 overflow-hidden rounded-xl border text-xs shadow-xl backdrop-blur-md">
       {/* Menu Header hint */}
       <div className="bg-muted/30 border-border/50 text-muted-foreground flex items-center justify-between gap-2 border-b px-2.5 py-1.5 text-[10.5px] select-none">
         <span className="text-foreground/80 flex shrink-0 items-center gap-1 font-medium">
@@ -76,7 +76,7 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({
                 e.preventDefault(); // Prevent textarea blur
                 onSelect(item);
               }}
-              className={`flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-1.5 transition-colors duration-100 select-none ${
+              className={`flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-1.5 select-none ${
                 isSelected
                   ? 'bg-primary/15 text-foreground font-medium'
                   : 'hover:bg-muted/40 text-foreground/90'

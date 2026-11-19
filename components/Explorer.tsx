@@ -416,11 +416,11 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
         </div>
 
         {/* Hover Action Buttons */}
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100">
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 ease-[var(--ease-out)] group-hover:opacity-100">
           <button
             onClick={() => handleCopyUrl(flatItem)}
             title={t('copyUrl') || 'Copy URL'}
-            className="text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer rounded p-1 active:scale-90"
+            className="text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer rounded p-1 transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
           >
             {copiedId === node.id ? (
               <Check className="size-3 text-emerald-500" />
@@ -433,14 +433,14 @@ export const Explorer: React.FC<ExplorerProps> = React.memo(function Explorer({
             target="_blank"
             rel="noreferrer"
             title={t('openInTabTooltip')}
-            className="text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer rounded p-1 active:scale-90"
+            className="text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer rounded p-1 transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
           >
             <ExternalLink className="size-3" />
           </a>
           <button
             onClick={() => handleDeleteBookmark(flatItem)}
             title={t('deleteBookmarkTooltip') || 'Move to Recycle Bin'}
-            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer rounded p-1 active:scale-90"
+            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer rounded p-1 transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
           >
             <Trash2 className="size-3" />
           </button>

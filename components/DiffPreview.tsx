@@ -287,7 +287,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
   const showRemoves = activeFilter === 'all' || activeFilter === 'removes';
 
   return (
-    <div className="bg-card border-border/80 animate-in fade-in-0 zoom-in-95 flex max-h-[calc(100vh-145px)] min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-xs transition-all duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]">
+    <div className="bg-card border-border/80 animate-in fade-in-0 zoom-in-95 flex max-h-[calc(100vh-145px)] min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-xs duration-200 ease-[var(--ease-out)]">
       {/* Plan Header */}
       <div className="bg-muted/30 border-border/70 space-y-2 border-b p-3">
         <div className="flex items-start justify-between gap-2">
@@ -450,7 +450,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
           return (
             <div
               key={group.key}
-              className="border-border/70 bg-card overflow-hidden rounded-xl border shadow-2xs transition-all duration-150"
+              className="border-border/70 bg-card overflow-hidden rounded-xl border shadow-2xs transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)]"
             >
               {/* Folder Group Header */}
               <div className="bg-muted/25 hover:bg-muted/40 flex items-center justify-between px-2.5 py-2 transition-colors select-none">
@@ -509,11 +509,11 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
                 {group.moves.length > 0 && (
                   <button
                     onClick={() => toggleFolderCollapse(group.key)}
-                    className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-transform duration-150 active:scale-90"
+                    className="text-muted-foreground hover:text-foreground cursor-pointer rounded p-1 transition-[transform,color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]"
                     title={isCollapsed ? 'Expand' : 'Collapse'}
                   >
                     <ChevronDown
-                      className={`size-3.5 transition-transform duration-150 ${
+                      className={`size-3.5 transition-transform duration-150 ease-[var(--ease-out)] ${
                         isCollapsed ? '-rotate-90' : 'rotate-0'
                       }`}
                     />
@@ -720,7 +720,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
             variant="ghost"
             onClick={onCancel}
             disabled={isApplying}
-            className="h-7 cursor-pointer px-3 text-xs transition-all duration-120 active:scale-[0.97]"
+            className="h-7 cursor-pointer px-3 text-xs"
           >
             {t('cancelBtn')}
           </Button>
@@ -728,7 +728,7 @@ export const DiffPreview: React.FC<DiffPreviewProps> = ({
             size="sm"
             onClick={handleApply}
             disabled={isApplying || selectedIndices.size === 0}
-            className="bg-primary text-primary-foreground h-7 cursor-pointer gap-1.5 px-3.5 text-xs font-medium shadow-xs transition-all duration-120 active:scale-[0.97]"
+            className="bg-primary text-primary-foreground h-7 cursor-pointer gap-1.5 px-3.5 text-xs font-medium shadow-xs"
           >
             {isApplying ? (
               <span>{t('applyingBtn')}</span>

@@ -419,7 +419,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="animate-in fade-in slide-in-from-top-1 mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3 duration-150">
+    <div className="animate-in fade-in slide-in-from-top-1 mx-auto flex w-full max-w-4xl flex-1 flex-col space-y-3 p-3 duration-150 ease-[var(--ease-out)]">
       {/* Top Bar with Back Button (same pattern as Recycle Bin) */}
       <div className="border-border/40 flex items-center justify-between gap-2 border-b pb-3">
         <div className="flex items-center gap-2">
@@ -730,7 +730,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   key={opt.value}
                   type="button"
                   onClick={() => setTheme(opt.value)}
-                  className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium transition-all ${
+                  className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-medium transition-[background-color,color,border-color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.98] ${
                     isSelected
                       ? 'bg-card text-foreground border-border/70 border font-semibold shadow-2xs'
                       : 'text-muted-foreground hover:text-foreground'

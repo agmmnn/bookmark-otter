@@ -346,7 +346,7 @@ export const App: React.FC = () => {
           data-active={activeTab === 'inbox' && !isOverlayOpen}
           onClick={() => handleTabChange('inbox')}
           title={t('tabInbox') || 'Inbox'}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             activeTab === 'inbox' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
@@ -372,7 +372,7 @@ export const App: React.FC = () => {
           data-active={activeTab === 'library' && !isOverlayOpen}
           onClick={() => handleTabChange('library')}
           title={t('tabLibrary') || 'Library'}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             activeTab === 'library' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
@@ -398,7 +398,7 @@ export const App: React.FC = () => {
           data-active={activeTab === 'copilot' && !isOverlayOpen}
           onClick={() => handleTabChange('copilot')}
           title={t('tabCopilot') || 'Copilot'}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             activeTab === 'copilot' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'
@@ -427,7 +427,7 @@ export const App: React.FC = () => {
             handleTabChange('doctor');
           }}
           title={t('tabDoctor') || 'Doctor'}
-          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-all duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] ${
+          className={`flex min-w-0 cursor-pointer items-center justify-center rounded-md py-1.5 text-[11px] font-medium whitespace-nowrap transition-[transform,background-color,border-color,color,box-shadow] duration-150 ease-[var(--ease-out)] active:scale-[0.97] ${
             activeTab === 'doctor' && !isOverlayOpen
               ? 'bg-card text-foreground border-border/70 flex-[1.4] border px-2.5 font-semibold shadow-2xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/30 flex-1 px-1.5'

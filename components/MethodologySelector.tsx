@@ -65,7 +65,7 @@ export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
   const isCustomActive = activeMethodologyId === CUSTOM_METHODOLOGY_ID;
 
   return (
-    <div className="bg-card/98 border-border/80 animate-in fade-in slide-in-from-top-1 relative z-30 mt-1.5 rounded-xl border p-2.5 shadow-lg backdrop-blur-md duration-150">
+    <div className="bg-card/98 border-border/80 animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 relative z-30 mt-1.5 origin-top-left rounded-xl border p-2.5 shadow-lg backdrop-blur-md duration-150 ease-[var(--ease-out)]">
       {/* Popover Header */}
       <div className="border-border/50 mb-2 flex items-center justify-between gap-2 border-b pb-2">
         <div className="flex items-center gap-1.5">
@@ -125,7 +125,7 @@ export const MethodologySelector: React.FC<MethodologySelectorProps> = ({
                   onClose();
                 }
               }}
-              className={`group cursor-pointer rounded-lg border p-2 transition-colors duration-150 ${
+              className={`group cursor-pointer rounded-lg border p-2 transition-[transform,border-color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.99] ${
                 isSelected
                   ? 'border-primary/60 bg-primary/8'
                   : 'border-border/50 bg-background/60 hover:border-border hover:bg-muted/40'
